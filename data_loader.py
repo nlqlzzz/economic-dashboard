@@ -15,6 +15,8 @@ def load_data(source: str, ticker: str, start_date: str) -> pd.Series:
         return _load_fred(ticker, start_date)
     if source == "yfinance":
         return _load_yfinance(ticker, start_date)
+    if source == "mof_jgb":
+        return _load_mof_jgb(ticker, start_date)
     raise ValueError(f"未対応のデータソースです: {source}")
 
 
@@ -51,3 +53,38 @@ def _load_yfinance(ticker: str, start_date: str) -> pd.Series:
     close.index = pd.to_datetime(close.index).tz_localize(None)
     close.name = ticker
     return close.dropna()
+
+
+def _load_mof_jgb(maturity: str, start_date: str) -> pd.Series:
+    """財務省の国債金利情報から指定年限の利回りを取得する。"""
+    url = "https://www.mof.go.jp/jgbs/reference/interest_rate/data/jgbcm_all.csv"
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+
+    # CSVはShift_JIS系の文字コードで、1行目はタイトル、2行目が見出し。
+    text = response.content.decode("cp932")
+    frame = pd.read_csv(StringIO(text), header=1)
+    frame.columns = frame.columns.str.strip()
+    date_column = frame.columns[0]
+    if maturity not in frame.columns:
+        raise ValueError(f"財務省データに{maturity}の利回りがありません")
+
+    dates = frame[date_column].map(_parse_japanese_era_date)
+    series = pd.Series(pd.to_numeric(frame[maturity], errors="coerce").to_numpy(), index=dates)
+    series = series[series.index.notna()].dropna()
+    series.name = maturity
+    return series.loc[pd.Timestamp(start_date) :]
+
+
+def _parse_japanese_era_date(value: object) -> pd.Timestamp | pd.NaT:
+    """例: S49.9.24 / H1.1.8 / R6.1.4 を西暦の日付に変換する。"""
+    try:
+        era_year, month, day = str(value).strip().split(".")
+        era_offsets = {"S": 1925, "H": 1988, "R": 2018}
+        return pd.Timestamp(
+            year=era_offsets[era_year[0]] + int(era_year[1:]),
+            month=int(month),
+            day=int(day),
+        )
+    except (KeyError, TypeError, ValueError):
+        return pd.NaT
