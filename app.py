@@ -13,12 +13,25 @@ from utils import calc_yoy, latest_value, normalize
 
 
 st.set_page_config(page_title="経済指標ダッシュボード", layout="wide")
+st.markdown(
+    """
+    <style>
+    @media (max-width: 768px) {
+        [data-testid="stAppViewContainer"] h1 {
+            font-size: 2rem;
+            line-height: 1.25;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.title("経済指標ダッシュボード")
 st.caption("FRED と Yahoo Finance の公開データを表示します。")
 
 with st.sidebar:
     st.header("表示設定")
-    start_date = st.date_input("開始日", value=date(2020, 1, 1), max_value=date.today())
+    start_date = st.date_input("開始日", value=date(2026, 1, 1), max_value=date.today())
     normalize_values = st.checkbox("100を基準に比較する", value=False)
     st.divider()
 
@@ -67,10 +80,16 @@ for name, series in series_to_plot.items():
     figure.add_trace(go.Scatter(x=series.index, y=series, mode="lines", name=label))
 
 figure.update_layout(
-    height=520,
+    height=420,
     hovermode="x unified",
-    legend_title_text="指標",
-    margin=dict(l=20, r=20, t=30, b=20),
+    legend=dict(
+        orientation="h",
+        yanchor="top",
+        y=-0.2,
+        xanchor="left",
+        x=0,
+    ),
+    margin=dict(l=20, r=20, t=30, b=90),
 )
 figure.update_yaxes(title="100基準" if normalize_values else "値")
 st.plotly_chart(figure, use_container_width=True)
