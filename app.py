@@ -51,6 +51,31 @@ WATCHLISTS: dict[str, set[str]] = {
         "三菱重工（7011）",
         "任天堂（7974）",
     },
+    "主要国株価指数": {
+        "日経平均株価",
+        "S&P 500指数",
+        "中国：上海総合指数",
+        "インド：NIFTY 50",
+        "ベトナム：VN-Index",
+        "ドイツ：DAX",
+        "スペイン：IBEX 35",
+        "ポーランド：WIG20",
+        "メキシコ：S&P/BMV IPC",
+        "オーストラリア：S&P/ASX 200",
+    },
+    "米国セクター": {
+        "情報技術（XLK）",
+        "金融（XLF）",
+        "ヘルスケア（XLV）",
+        "一般消費財（XLY）",
+        "生活必需品（XLP）",
+        "資本財・サービス（XLI）",
+        "エネルギー（XLE）",
+        "素材（XLB）",
+        "公益事業（XLU）",
+        "不動産（XLRE）",
+        "コミュニケーション・サービス（XLC）",
+    },
     "為替": {
         "USD/JPY",
         "EUR/JPY",
@@ -109,7 +134,10 @@ with st.sidebar:
         for name in INDICATORS:
             st.session_state[f"show_{name}_default_v2"] = False
 
-    categories = dict.fromkeys(info["category"] for info in INDICATORS.values())
+    category_order = ["経済指標", "為替", "マーケット", "米国セクター", "注目銘柄", "金利"]
+    available_categories = dict.fromkeys(info["category"] for info in INDICATORS.values())
+    categories = [category for category in category_order if category in available_categories]
+    categories.extend(category for category in available_categories if category not in categories)
     for category in categories:
         st.subheader(category)
         for name, info in INDICATORS.items():
