@@ -4,21 +4,21 @@ INDICATORS = {
         "ticker": "CPIAUCSL",
         "unit": "指数",
         "yoy": True,
-        "category": "経済指標",
+        "category": "米国経済指標",
     },
     "FF金利": {
         "source": "fred",
         "ticker": "FEDFUNDS",
         "unit": "%",
         "yoy": False,
-        "category": "経済指標",
+        "category": "米国経済指標",
     },
     "失業率": {
         "source": "fred",
         "ticker": "UNRATE",
         "unit": "%",
         "yoy": False,
-        "category": "経済指標",
+        "category": "米国経済指標",
     },
     "USD/JPY": {
         "source": "yfinance",
@@ -295,7 +295,7 @@ INDICATORS = {
     },
     "ベトナム：VN-Index": {
         "source": "yfinance",
-        "ticker": "^VNINDEX.VN",
+        "ticker": "0P0000HY8X.VN",
         "unit": "ポイント",
         "yoy": False,
         "category": "マーケット",
@@ -314,9 +314,9 @@ INDICATORS = {
         "yoy": False,
         "category": "マーケット",
     },
-    "ポーランド：WIG20": {
-        "source": "yfinance",
-        "ticker": "WIG20.WA",
+    "ポーランド：NASDAQ Poland": {
+        "source": "fred",
+        "ticker": "NASDAQNQPL",
         "unit": "ポイント",
         "yoy": False,
         "category": "マーケット",
