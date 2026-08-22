@@ -1,0 +1,20 @@
+# API keys and other local secrets
+.streamlit/secrets.toml
+.env
+.env.*
+
+# Python cache and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Editor-specific settings
+.vscode/
+
+# Local backup copies
+bkup/
