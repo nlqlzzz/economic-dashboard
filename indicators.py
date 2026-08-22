@@ -202,6 +202,27 @@ INDICATORS = {
         "yoy": False,
         "category": "金利",
     },
+    "日米金利差 2Y（米国−日本）": {
+        "source": "us_jp_yield_spread",
+        "ticker": "2Y",
+        "unit": "pt",
+        "yoy": False,
+        "category": "金利",
+    },
+    "日米金利差 10Y（米国−日本）": {
+        "source": "us_jp_yield_spread",
+        "ticker": "10Y",
+        "unit": "pt",
+        "yoy": False,
+        "category": "金利",
+    },
+    "日米金利差 30Y（米国−日本）": {
+        "source": "us_jp_yield_spread",
+        "ticker": "30Y",
+        "unit": "pt",
+        "yoy": False,
+        "category": "金利",
+    },
     "情報技術（XLK）": {
         "source": "yfinance",
         "ticker": "XLK",
