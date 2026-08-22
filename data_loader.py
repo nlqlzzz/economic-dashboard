@@ -17,6 +17,8 @@ def load_data(source: str, ticker: str, start_date: str) -> pd.Series:
         return _load_yfinance(ticker, start_date)
     if source == "mof_jgb":
         return _load_mof_jgb(ticker, start_date)
+    if source == "us_jp_yield_spread":
+        return _load_us_jp_yield_spread(ticker, start_date)
     raise ValueError(f"未対応のデータソースです: {source}")
 
 
@@ -74,6 +76,27 @@ def _load_mof_jgb(maturity: str, start_date: str) -> pd.Series:
     series = series[series.index.notna()].dropna()
     series.name = maturity
     return series.loc[pd.Timestamp(start_date) :]
+
+
+def _load_us_jp_yield_spread(maturity: str, start_date: str) -> pd.Series:
+    """同年限の米国債利回りから日本国債利回りを引いた金利差を返す。"""
+    maturity_map = {
+        "2Y": ("DGS2", "2年"),
+        "10Y": ("DGS10", "10年"),
+        "30Y": ("DGS30", "30年"),
+    }
+    if maturity not in maturity_map:
+        raise ValueError(f"未対応の日米金利差です: {maturity}")
+
+    ust_ticker, jgb_maturity = maturity_map[maturity]
+    ust = _load_fred(ust_ticker, start_date).rename("US")
+    jgb = _load_mof_jgb(jgb_maturity, start_date).rename("JP")
+
+    # 日米の休場日が異なるため、両系列を時系列順に並べて過去の最新値で補完する。
+    aligned = pd.concat([ust, jgb], axis=1).sort_index().ffill().dropna()
+    spread = aligned["US"] - aligned["JP"]
+    spread.name = f"US-JP {maturity}"
+    return spread.loc[pd.Timestamp(start_date) :]
 
 
 def _parse_japanese_era_date(value: object) -> pd.Timestamp | pd.NaT:
