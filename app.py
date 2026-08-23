@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from data_loader import load_data
-from indicators import INDICATORS
+from indicators import DATA_SOURCE_LABELS, INDICATORS
 from macro_regime import assess_us_macro_regime
 from correlation_analysis import build_weekly_return_frame, correlation_pairs
 
@@ -224,7 +224,9 @@ for column, (name, series) in zip(cards, series_to_plot.items()):
     else:
         change, previous_rate = previous_change
         delta = f"{change:+,.2f}（{previous_rate:+.2f}%）"
+    source_label = DATA_SOURCE_LABELS.get(info["source"], info["source"])
     column.metric(name, display_value, delta=delta, help=f"観測日: {observed_at:%Y-%m-%d}")
+    column.caption(f"データ日: {observed_at:%Y-%m-%d}｜データ元: {source_label}")
 
     def format_rate(rate: float | None) -> str:
         return "—" if rate is None else f"{rate:+.2f}%"
