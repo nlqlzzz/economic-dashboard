@@ -12,6 +12,7 @@ INDICATORS = {
         "ticker": "CPIAUCSL",
         "unit": "指数",
         "yoy": True,
+        "correlation_method": "monthly_change",
         "category": "米国経済指標",
     },
     "FF金利": {
@@ -19,6 +20,7 @@ INDICATORS = {
         "ticker": "FEDFUNDS",
         "unit": "%",
         "yoy": False,
+        "correlation_method": "monthly_change",
         "category": "米国経済指標",
     },
     "失業率": {
@@ -26,6 +28,7 @@ INDICATORS = {
         "ticker": "UNRATE",
         "unit": "%",
         "yoy": False,
+        "correlation_method": "monthly_change",
         "category": "米国経済指標",
     },
     "USD/JPY": {
