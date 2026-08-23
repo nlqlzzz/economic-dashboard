@@ -2,10 +2,29 @@ import unittest
 
 import pandas as pd
 
-from macro_regime import build_us_macro_assessment_history
+from macro_regime import build_macro_focus_guide, build_us_macro_assessment_history
 
 
 class MacroAssessmentHistoryTest(unittest.TestCase):
+    def test_builds_focus_guide_for_each_macro_dimension(self) -> None:
+        regime = {
+            "labor": {"status": "悪化"},
+            "inflation": {"status": "上昇"},
+            "policy": {"status": "引き締め"},
+            "curve": {"status": "逆イールド"},
+        }
+
+        guide = build_macro_focus_guide(regime)
+
+        self.assertEqual(
+            [item["dimension"] for item in guide],
+            ["景気", "物価", "金融政策", "イールドカーブ"],
+        )
+        self.assertIn("VIX指数", guide[0]["indicators"])
+        self.assertIn("WTI原油先物", guide[1]["indicators"])
+        self.assertIn("UST 2Y", guide[2]["indicators"])
+        self.assertIn("VIX指数", guide[3]["indicators"])
+
     def test_builds_historical_labels_and_scores(self) -> None:
         dates = pd.date_range("2024-01-01", periods=18, freq="MS")
         cpi = pd.Series([100 + index for index in range(18)], index=dates)
