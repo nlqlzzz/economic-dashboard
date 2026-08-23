@@ -265,6 +265,28 @@ correlation_period_months = {
     "1年": 12,
     "3年": 36,
 }
+correlation_presets = {
+    "為替と日本株": ["USD/JPY", "日経平均株価"],
+    "米金利と半導体株": ["UST 10Y", "SOX指数"],
+    "米金利と米国株": ["UST 10Y", "S&P 500指数"],
+    "米物価と政策金利": ["CPI", "FF金利"],
+}
+if "correlation_names" not in st.session_state:
+    st.session_state["correlation_names"] = selected_names[:8]
+
+st.markdown("##### よく使う組合せ")
+st.caption("ボタンを押すと、下の相関分析対象へ2指標が設定されます。")
+preset_columns = st.columns(2)
+for preset_index, (preset_name, preset_indicators) in enumerate(correlation_presets.items()):
+    with preset_columns[preset_index % 2]:
+        if st.button(
+            preset_name,
+            key=f"correlation_preset_{preset_index}",
+            use_container_width=True,
+            help=" × ".join(preset_indicators),
+        ):
+            st.session_state["correlation_names"] = preset_indicators
+
 analysis_left, analysis_right = st.columns([1, 2])
 with analysis_left:
     correlation_period_label = st.selectbox(
@@ -274,8 +296,8 @@ with analysis_right:
     correlation_names = st.multiselect(
         "相関分析の対象（最大8指標）",
         options=list(INDICATORS),
-        default=selected_names[:8],
         max_selections=8,
+        key="correlation_names",
         help="例：USD/JPYと日経平均株価、UST 10YとSOX指数を選択します。",
     )
 
