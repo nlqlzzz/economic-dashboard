@@ -9,7 +9,7 @@ import streamlit as st
 from data_loader import load_data
 from indicators import DATA_SOURCE_LABELS, INDICATORS
 from macro_regime import assess_us_macro_regime
-from correlation_analysis import build_weekly_return_frame, correlation_pairs
+from correlation_analysis import build_correlation_frame, correlation_pairs
 
 from utils import change_from_previous, calc_yoy, latest_value, normalize, percent_change_since
 
@@ -254,7 +254,10 @@ st.divider()
 st.header("参考情報")
 
 st.subheader("相関分析（参考）")
-st.caption("各指標の週次騰落率を比較します。初期値は、上で選択している指標です。")
+st.caption(
+    "価格系は騰落率、金利・金利差・マクロ指標はポイント変化で比較します。"
+    "マクロ指標を含む場合は月次、それ以外は週次です。初期値は、上で選択している指標です。"
+)
 
 correlation_period_months = {
     "3か月": 3,
@@ -285,15 +288,20 @@ else:
         - pd.DateOffset(days=14)
     ).date()
     correlation_series: dict[str, pd.Series] = {}
+    correlation_methods: dict[str, str] = {}
     correlation_errors: list[str] = []
     with st.spinner("相関分析用のデータを取得しています…"):
         for name in correlation_names:
             info = INDICATORS[name]
             try:
                 series = load_data(info["source"], info["ticker"], str(correlation_start_date))
-                if info.get("yoy", False):
-                    series = calc_yoy(series)
                 correlation_series[name] = series
+                if info.get("correlation_method"):
+                    correlation_methods[name] = info["correlation_method"]
+                elif info["category"] == "金利":
+                    correlation_methods[name] = "weekly_change"
+                else:
+                    correlation_methods[name] = "weekly_return"
             except Exception as error:
                 correlation_errors.append(f"{name}: {error}")
 
@@ -303,12 +311,15 @@ else:
     if len(correlation_series) < 2:
         st.warning("相関を計算できる指標が2つ以上ありません。")
     else:
-        weekly_returns = build_weekly_return_frame(correlation_series)
-        correlation_matrix = weekly_returns.corr(min_periods=8)
-        pair_table = correlation_pairs(weekly_returns)
+        correlation_frame, correlation_labels, frequency_label = build_correlation_frame(
+            correlation_series, correlation_methods
+        )
+        minimum_observations = 3 if frequency_label == "月次" else 8
+        correlation_matrix = correlation_frame.corr(min_periods=minimum_observations)
+        pair_table = correlation_pairs(correlation_frame, minimum_observations)
 
         if pair_table.empty:
-            st.info("相関を計算するための共通する週次データが十分にありません。")
+            st.info(f"相関を計算するための共通する{frequency_label}データが十分にありません。")
         else:
             pair_table["相関係数"] = pair_table["相関係数"].map(lambda value: f"{value:+.2f}")
             st.markdown("##### 相関係数一覧")
@@ -338,22 +349,25 @@ else:
             with scatter_right:
                 scatter_y_options = [name for name in correlation_series if name != scatter_x_name]
                 scatter_y_name = st.selectbox("縦軸", scatter_y_options, key="correlation_y")
-            scatter_data = weekly_returns[[scatter_x_name, scatter_y_name]].dropna()
+            scatter_data = correlation_frame[[scatter_x_name, scatter_y_name]].dropna()
             scatter_figure = go.Figure(
                 go.Scatter(
-                    x=scatter_data[scatter_x_name] * 100,
-                    y=scatter_data[scatter_y_name] * 100,
+                    x=scatter_data[scatter_x_name],
+                    y=scatter_data[scatter_y_name],
                     mode="markers",
                     marker=dict(size=8, opacity=0.7),
                     text=[observed.strftime("%Y-%m-%d") for observed in scatter_data.index],
-                    hovertemplate="週末: %{text}<br>横軸: %{x:.2f}%<br>縦軸: %{y:.2f}%<extra></extra>",
+                    hovertemplate=(
+                        f"{frequency_label}: %{{text}}<br>"
+                        "横軸: %{x:.2f}<br>縦軸: %{y:.2f}<extra></extra>"
+                    ),
                 )
             )
             scatter_figure.update_layout(
                 height=380,
                 margin=dict(l=20, r=20, t=20, b=50),
-                xaxis_title=f"{scatter_x_name}（週次騰落率）",
-                yaxis_title=f"{scatter_y_name}（週次騰落率）",
+                xaxis_title=f"{scatter_x_name}（{correlation_labels[scatter_x_name]}）",
+                yaxis_title=f"{scatter_y_name}（{correlation_labels[scatter_y_name]}）",
             )
             st.plotly_chart(scatter_figure, use_container_width=True)
 
