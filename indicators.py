@@ -1,3 +1,11 @@
+DATA_SOURCE_LABELS = {
+    "fred": "FRED",
+    "yfinance": "Yahoo Finance",
+    "mof_jgb": "財務省",
+    "us_jp_yield_spread": "FRED・財務省",
+}
+
+
 INDICATORS = {
     "CPI": {
         "source": "fred",
