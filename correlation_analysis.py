@@ -94,6 +94,26 @@ def correlation_pairs(returns: pd.DataFrame, minimum_observations: int = 8) -> p
     return pd.DataFrame(rows, columns=["指標1", "指標2", "相関係数", "データ数"])
 
 
+def linear_regression_summary(
+    left: pd.Series, right: pd.Series
+) -> tuple[float, float, float] | None:
+    """2系列の傾き、切片、相関係数を返す。回帰不能な場合はNone。"""
+    pair = pd.concat({"left": left, "right": right}, axis=1).dropna()
+    if len(pair) < 2 or pair["left"].nunique() < 2:
+        return None
+
+    left_variance = pair["left"].var()
+    if pd.isna(left_variance) or left_variance == 0:
+        return None
+
+    slope = pair["left"].cov(pair["right"]) / left_variance
+    intercept = pair["right"].mean() - slope * pair["left"].mean()
+    correlation = pair["left"].corr(pair["right"])
+    if pd.isna(slope) or pd.isna(intercept) or pd.isna(correlation):
+        return None
+    return float(slope), float(intercept), float(correlation)
+
+
 def _correlation_for_last(returns: pd.DataFrame, weeks: int) -> float | None:
     window = returns.tail(weeks)
     if len(window) < 2:
