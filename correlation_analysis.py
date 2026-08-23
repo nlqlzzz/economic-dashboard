@@ -114,6 +114,16 @@ def linear_regression_summary(
     return float(slope), float(intercept), float(correlation)
 
 
+def rolling_correlation(
+    left: pd.Series, right: pd.Series, window: int
+) -> pd.Series:
+    """欠損のない共通観測値を使い、指定期間のローリング相関を返す。"""
+    pair = pd.concat({"left": left, "right": right}, axis=1).dropna()
+    if len(pair) < window:
+        return pd.Series(dtype=float)
+    return pair["left"].rolling(window).corr(pair["right"]).dropna()
+
+
 def _correlation_for_last(returns: pd.DataFrame, weeks: int) -> float | None:
     window = returns.tail(weeks)
     if len(window) < 2:
