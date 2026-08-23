@@ -13,6 +13,7 @@ from correlation_analysis import (
     build_correlation_frame,
     correlation_pairs,
     linear_regression_summary,
+    rolling_correlation,
 )
 
 from utils import change_from_previous, calc_yoy, latest_value, normalize, percent_change_since
@@ -424,6 +425,50 @@ else:
                     f"相関係数: {scatter_correlation:+.2f}｜"
                     f"回帰式: y = {slope:.3f}x {intercept:+.3f}｜"
                     f"データ数: {len(scatter_data)}"
+                )
+
+            st.markdown("##### ローリング相関")
+            if frequency_label == "月次":
+                rolling_windows = {"6か月": 6, "12か月": 12}
+            else:
+                rolling_windows = {"13週": 13, "26週": 26}
+            rolling_window_label = st.selectbox(
+                "計算期間",
+                list(rolling_windows),
+                key=f"rolling_window_{frequency_label}",
+            )
+            rolling_values = rolling_correlation(
+                scatter_data[scatter_x_name],
+                scatter_data[scatter_y_name],
+                rolling_windows[rolling_window_label],
+            )
+            if rolling_values.empty:
+                st.info(
+                    f"{rolling_window_label}ローリング相関を計算するためのデータが"
+                    "十分にありません。相関を調べる期間を長くしてください。"
+                )
+            else:
+                rolling_figure = go.Figure(
+                    go.Scatter(
+                        x=rolling_values.index,
+                        y=rolling_values,
+                        mode="lines",
+                        name=f"{rolling_window_label}相関",
+                        line=dict(width=2),
+                        hovertemplate="日付: %{x|%Y-%m-%d}<br>相関係数: %{y:.2f}<extra></extra>",
+                    )
+                )
+                rolling_figure.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray")
+                rolling_figure.update_layout(
+                    height=340,
+                    margin=dict(l=20, r=20, t=20, b=40),
+                    yaxis=dict(title="相関係数", range=[-1.05, 1.05]),
+                    xaxis_title="日付",
+                )
+                st.plotly_chart(rolling_figure, use_container_width=True)
+                st.caption(
+                    f"最新の{rolling_window_label}相関: {rolling_values.iloc[-1]:+.2f}｜"
+                    f"{scatter_x_name} × {scatter_y_name}"
                 )
 
         st.caption("相関係数は-1から+1です。相関は因果関係や将来の値動きを示すものではなく、景気・インフレ・リスク回避など市場環境によって変化します。")
