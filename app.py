@@ -5,6 +5,7 @@ from datetime import date
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 from streamlit_local_storage import LocalStorage
 
 from data_loader import load_data
@@ -252,28 +253,93 @@ if not series_to_plot:
     st.error("データを表示できませんでした。ネットワーク接続とティッカーを確認してください。")
     st.stop()
 
-figure = go.Figure()
-for name, series in series_to_plot.items():
+graph_display_mode = st.radio(
+    "グラフ表示",
+    ["重ねて表示", "左右の軸", "個別グラフ"],
+    horizontal=True,
+    key="graph_display_mode",
+)
+right_axis_names: list[str] = []
+if graph_display_mode == "左右の軸":
+    right_axis_names = st.multiselect(
+        "右軸に表示する指標",
+        options=list(series_to_plot),
+        default=list(series_to_plot)[-1:] if len(series_to_plot) > 1 else [],
+        help="選ばなかった指標は左軸に表示します。",
+    )
+
+
+def chart_label(name: str) -> str:
     info = INDICATORS[name]
     label = f"{name}（前年比 %）" if info.get("yoy") else f"{name}（{info['unit']}）"
     if normalize_values:
         label = f"{name}（開始日=100）"
-    figure.add_trace(go.Scatter(x=series.index, y=series, mode="lines", name=label))
+    return label
 
-figure.update_layout(
-    height=420,
-    hovermode="x unified",
-    legend=dict(
-        orientation="h",
-        yanchor="top",
-        y=-0.2,
-        xanchor="left",
-        x=0,
-    ),
-    margin=dict(l=20, r=20, t=30, b=90),
-)
-figure.update_yaxes(title="100基準" if normalize_values else "値")
-st.plotly_chart(figure, use_container_width=True)
+
+def chart_axis_title(name: str) -> str:
+    if normalize_values:
+        return "100基準"
+    info = INDICATORS[name]
+    return "前年比 %" if info.get("yoy") else info["unit"]
+
+
+if graph_display_mode == "個別グラフ":
+    for name, series in series_to_plot.items():
+        individual_figure = go.Figure(
+            go.Scatter(
+                x=series.index,
+                y=series,
+                mode="lines",
+                name=chart_label(name),
+            )
+        )
+        individual_figure.update_layout(
+            height=300,
+            title=dict(text=chart_label(name), font=dict(size=16)),
+            hovermode="x unified",
+            showlegend=False,
+            margin=dict(l=20, r=20, t=45, b=35),
+        )
+        individual_figure.update_yaxes(title=chart_axis_title(name))
+        st.plotly_chart(individual_figure, use_container_width=True)
+else:
+    if graph_display_mode == "左右の軸":
+        figure = make_subplots(specs=[[{"secondary_y": True}]])
+    else:
+        figure = go.Figure()
+
+    for name, series in series_to_plot.items():
+        trace = go.Scatter(x=series.index, y=series, mode="lines", name=chart_label(name))
+        if graph_display_mode == "左右の軸":
+            figure.add_trace(trace, secondary_y=name in right_axis_names)
+        else:
+            figure.add_trace(trace)
+
+    figure.update_layout(
+        height=420,
+        hovermode="x unified",
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.2,
+            xanchor="left",
+            x=0,
+        ),
+        margin=dict(l=20, r=20, t=30, b=90),
+    )
+    if graph_display_mode == "左右の軸":
+        figure.update_yaxes(
+            title="左軸（100基準）" if normalize_values else "左軸",
+            secondary_y=False,
+        )
+        figure.update_yaxes(
+            title="右軸（100基準）" if normalize_values else "右軸",
+            secondary_y=True,
+        )
+    else:
+        figure.update_yaxes(title="100基準" if normalize_values else "値")
+    st.plotly_chart(figure, use_container_width=True)
 st.checkbox("100を基準に比較する", value=True, key="normalize_values_v2")
 
 latest_values_note = (
