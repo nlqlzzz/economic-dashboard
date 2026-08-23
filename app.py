@@ -119,6 +119,17 @@ WATCHLISTS: dict[str, set[str]] = {
 }
 
 WATCHLIST_STORAGE_KEY = "economic_dashboard_watchlists_v1"
+KEY_MARKET_INDICATORS = {
+    "CPI",
+    "FF金利",
+    "失業率",
+    "USD/JPY",
+    "日経平均株価",
+    "S&P 500指数",
+    "VIX指数",
+    "UST 10Y",
+    "JGB 10Y",
+}
 
 with st.sidebar:
     st.header("表示設定")
@@ -271,9 +282,14 @@ latest_values_note = (
     else ""
 )
 st.markdown(f"### 最新値　{latest_values_note}", unsafe_allow_html=True)
-cards = st.columns(len(series_to_plot))
+st.caption("★ 主要は、景気・為替・日米株・市場心理・長期金利の代表指標です。")
 change_rows: list[dict[str, str]] = []
-for column, (name, series) in zip(cards, series_to_plot.items()):
+card_items = list(series_to_plot.items())
+for card_index, (name, series) in enumerate(card_items):
+    if card_index % 4 == 0:
+        cards = st.columns(4)
+    column = cards[card_index % 4]
+    card = column.container(border=True)
     observed_at, value = latest_value(series)
     info = INDICATORS[name]
     suffix = "（前年比 %）" if info.get("yoy") else info["unit"]
@@ -285,9 +301,19 @@ for column, (name, series) in zip(cards, series_to_plot.items()):
     else:
         change, previous_rate = previous_change
         delta = f"{change:+,.2f}（{previous_rate:+.2f}%）"
+    if previous_rate is None:
+        movement_label = "－ 変化データなし"
+    elif previous_rate > 0.05:
+        movement_label = "↗ 上昇"
+    elif previous_rate < -0.05:
+        movement_label = "↘ 下落"
+    else:
+        movement_label = "→ 横ばい"
+    importance_label = "★ 主要" if name in KEY_MARKET_INDICATORS else "通常"
     source_label = DATA_SOURCE_LABELS.get(info["source"], info["source"])
-    column.metric(name, display_value, delta=delta, help=f"観測日: {observed_at:%Y-%m-%d}")
-    column.caption(f"データ日: {observed_at:%Y-%m-%d}｜データ元: {source_label}")
+    card.caption(f"{importance_label}｜{movement_label}")
+    card.metric(name, display_value, delta=delta, help=f"観測日: {observed_at:%Y-%m-%d}")
+    card.caption(f"データ日: {observed_at:%Y-%m-%d}｜データ元: {source_label}")
 
     def format_rate(rate: float | None) -> str:
         return "—" if rate is None else f"{rate:+.2f}%"
