@@ -97,6 +97,27 @@ INDICATORS = {
         "yoy": False,
         "category": "為替",
     },
+    "CHF/JPY": {
+        "source": "yfinance",
+        "ticker": "CHFJPY=X",
+        "unit": "円",
+        "yoy": False,
+        "category": "為替",
+    },
+    "AUD/MXN": {
+        "source": "yfinance",
+        "ticker": "AUDMXN=X",
+        "unit": "メキシコペソ",
+        "yoy": False,
+        "category": "為替",
+    },
+    "MXN/CHF": {
+        "source": "yfinance",
+        "ticker": "MXNCHF=X",
+        "unit": "スイスフラン",
+        "yoy": False,
+        "category": "為替",
+    },
     "キオクシア（285A）": {
         "source": "yfinance",
         "ticker": "285A.T",

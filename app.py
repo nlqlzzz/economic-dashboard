@@ -83,6 +83,9 @@ WATCHLISTS: dict[str, set[str]] = {
         "EUR/JPY",
         "AUD/JPY",
         "MXN/JPY",
+        "CHF/JPY",
+        "AUD/MXN",
+        "MXN/CHF",
     },
     "金利": {
         "UST 2Y",
@@ -125,7 +128,6 @@ with st.sidebar:
         st.session_state["start_date"] = period_starts[selected_period]
     st.session_state["last_selected_period"] = selected_period
     start_date = st.date_input("開始日", max_value=date.today(), key="start_date")
-    normalize_values = st.checkbox("100を基準に比較する", value=True, key="normalize_values_v2")
     st.divider()
 
     selected_names: list[str] = []
@@ -154,6 +156,7 @@ if not selected_names:
     st.info("左のメニューから、表示する指標を一つ以上選んでください。")
     st.stop()
 
+normalize_values = st.session_state.get("normalize_values_v2", True)
 series_to_plot: dict[str, pd.Series] = {}
 errors: list[str] = []
 
@@ -199,16 +202,21 @@ figure.update_layout(
 )
 figure.update_yaxes(title="100基準" if normalize_values else "値")
 st.plotly_chart(figure, use_container_width=True)
+st.checkbox("100を基準に比較する", value=True, key="normalize_values_v2")
 
-st.subheader("最新値")
+latest_values_note = (
+    '<span style="font-size: 0.9rem; font-weight: 400; color: #888;">（開始日=100）</span>'
+    if normalize_values
+    else ""
+)
+st.markdown(f"### 最新値　{latest_values_note}", unsafe_allow_html=True)
 cards = st.columns(len(series_to_plot))
 change_rows: list[dict[str, str]] = []
 for column, (name, series) in zip(cards, series_to_plot.items()):
     observed_at, value = latest_value(series)
     info = INDICATORS[name]
     suffix = "（前年比 %）" if info.get("yoy") else info["unit"]
-    if normalize_values:
-        suffix = "（開始日=100）"
+    display_value = f"{value:,.2f}" if normalize_values else f"{value:,.2f} {suffix}"
     previous_change = change_from_previous(series)
     if previous_change is None:
         delta = None
@@ -216,7 +224,7 @@ for column, (name, series) in zip(cards, series_to_plot.items()):
     else:
         change, previous_rate = previous_change
         delta = f"{change:+,.2f}（{previous_rate:+.2f}%）"
-    column.metric(name, f"{value:,.2f} {suffix}", delta=delta, help=f"観測日: {observed_at:%Y-%m-%d}")
+    column.metric(name, display_value, delta=delta, help=f"観測日: {observed_at:%Y-%m-%d}")
 
     def format_rate(rate: float | None) -> str:
         return "—" if rate is None else f"{rate:+.2f}%"
@@ -242,52 +250,6 @@ with st.expander("データ一覧"):
 
 st.divider()
 st.header("参考情報")
-
-st.subheader("米国マクロ局面（参考）")
-try:
-    regime_start_date = (pd.Timestamp.today().normalize() - pd.DateOffset(months=20)).date()
-    with st.spinner("マクロ指標を確認しています…"):
-        macro_regime = assess_us_macro_regime(
-            cpi=load_data("fred", "CPIAUCSL", str(regime_start_date)),
-            unemployment=load_data("fred", "UNRATE", str(regime_start_date)),
-            fed_funds=load_data("fred", "FEDFUNDS", str(regime_start_date)),
-            ust_2y=load_data("fred", "DGS2", str(regime_start_date)),
-            ust_10y=load_data("fred", "DGS10", str(regime_start_date)),
-        )
-
-    st.info(f"**{macro_regime['regime']}**  \n{macro_regime['description']}")
-    inflation = macro_regime["inflation"]
-    labor = macro_regime["labor"]
-    policy = macro_regime["policy"]
-    curve = macro_regime["curve"]
-    macro_columns = st.columns(4)
-    macro_columns[0].metric(
-        "インフレ（CPI前年比）",
-        f"{inflation['value']:.2f}%",
-        delta=f"3か月: {inflation['change']:+.2f}pt（{inflation['status']}）",
-        help=f"最新値: {inflation['date']:%Y-%m-%d}",
-    )
-    macro_columns[1].metric(
-        "雇用（失業率）",
-        f"{labor['value']:.2f}%",
-        delta=f"3か月: {labor['change']:+.2f}pt（{labor['status']}）",
-        help=f"最新値: {labor['date']:%Y-%m-%d}",
-    )
-    macro_columns[2].metric(
-        "金融政策（FF金利）",
-        f"{policy['value']:.2f}%",
-        delta=f"3か月: {policy['change']:+.2f}pt（{policy['status']}）",
-        help=f"最新値: {policy['date']:%Y-%m-%d}",
-    )
-    macro_columns[3].metric(
-        "長短金利差（10年−2年）",
-        f"{curve['spread']:+.2f}pt",
-        delta=curve["status"],
-        help=f"UST 10Y: {curve['ust_10y']:.2f}% / UST 2Y: {curve['ust_2y']:.2f}%（{curve['date']:%Y-%m-%d}）",
-    )
-    st.caption("CPI前年比・失業率・FF金利の直近3か月変化と、米国債10年−2年の利回り差による参考判定です。投資判断や将来の市場動向を保証するものではありません。")
-except Exception as error:
-    st.warning(f"米国マクロ局面を判定できませんでした: {error}")
 
 st.subheader("相関分析（参考）")
 st.caption("各指標の週次騰落率を比較します。初期値は、上で選択している指標です。")
@@ -394,3 +356,49 @@ else:
             st.plotly_chart(scatter_figure, use_container_width=True)
 
         st.caption("相関係数は-1から+1です。相関は因果関係や将来の値動きを示すものではなく、景気・インフレ・リスク回避など市場環境によって変化します。")
+
+st.subheader("米国マクロ局面（参考）")
+try:
+    regime_start_date = (pd.Timestamp.today().normalize() - pd.DateOffset(months=20)).date()
+    with st.spinner("マクロ指標を確認しています…"):
+        macro_regime = assess_us_macro_regime(
+            cpi=load_data("fred", "CPIAUCSL", str(regime_start_date)),
+            unemployment=load_data("fred", "UNRATE", str(regime_start_date)),
+            fed_funds=load_data("fred", "FEDFUNDS", str(regime_start_date)),
+            ust_2y=load_data("fred", "DGS2", str(regime_start_date)),
+            ust_10y=load_data("fred", "DGS10", str(regime_start_date)),
+        )
+
+    st.info(f"**{macro_regime['regime']}**  \n{macro_regime['description']}")
+    inflation = macro_regime["inflation"]
+    labor = macro_regime["labor"]
+    policy = macro_regime["policy"]
+    curve = macro_regime["curve"]
+    macro_columns = st.columns(4)
+    macro_columns[0].metric(
+        "インフレ（CPI前年比）",
+        f"{inflation['value']:.2f}%",
+        delta=f"3か月: {inflation['change']:+.2f}pt（{inflation['status']}）",
+        help=f"最新値: {inflation['date']:%Y-%m-%d}",
+    )
+    macro_columns[1].metric(
+        "雇用（失業率）",
+        f"{labor['value']:.2f}%",
+        delta=f"3か月: {labor['change']:+.2f}pt（{labor['status']}）",
+        help=f"最新値: {labor['date']:%Y-%m-%d}",
+    )
+    macro_columns[2].metric(
+        "金融政策（FF金利）",
+        f"{policy['value']:.2f}%",
+        delta=f"3か月: {policy['change']:+.2f}pt（{policy['status']}）",
+        help=f"最新値: {policy['date']:%Y-%m-%d}",
+    )
+    macro_columns[3].metric(
+        "長短金利差（10年−2年）",
+        f"{curve['spread']:+.2f}pt",
+        delta=curve["status"],
+        help=f"UST 10Y: {curve['ust_10y']:.2f}% / UST 2Y: {curve['ust_2y']:.2f}%（{curve['date']:%Y-%m-%d}）",
+    )
+    st.caption("CPI前年比・失業率・FF金利の直近3か月変化と、米国債10年−2年の利回り差による参考判定です。投資判断や将来の市場動向を保証するものではありません。")
+except Exception as error:
+    st.warning(f"米国マクロ局面を判定できませんでした: {error}")
