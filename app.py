@@ -10,7 +10,11 @@ from streamlit_local_storage import LocalStorage
 
 from data_loader import load_data
 from indicators import DATA_SOURCE_LABELS, INDICATORS
-from macro_regime import assess_us_macro_regime, build_us_macro_trends
+from macro_regime import (
+    assess_us_macro_regime,
+    build_us_macro_assessment_history,
+    build_us_macro_trends,
+)
 from correlation_analysis import (
     build_correlation_frame,
     correlation_pairs,
@@ -644,6 +648,15 @@ try:
             ust_2y=macro_ust_2y,
             ust_10y=macro_ust_10y,
         )
+        macro_assessment_labels, macro_assessment_scores = (
+            build_us_macro_assessment_history(
+                cpi=macro_cpi,
+                unemployment=macro_unemployment,
+                fed_funds=macro_fed_funds,
+                ust_2y=macro_ust_2y,
+                ust_10y=macro_ust_10y,
+            )
+        )
 
     st.info(f"**{macro_regime['regime']}**  \n{macro_regime['description']}")
     inflation = macro_regime["inflation"]
@@ -675,6 +688,39 @@ try:
         delta=curve["status"],
         help=f"UST 10Y: {curve['ust_10y']:.2f}% / UST 2Y: {curve['ust_2y']:.2f}%（{curve['date']:%Y-%m-%d}）",
     )
+    with st.expander("過去の評価と比較する", expanded=True):
+        assessment_figure = go.Figure(
+            go.Heatmap(
+                x=macro_assessment_scores.index,
+                y=list(macro_assessment_scores.columns),
+                z=macro_assessment_scores.T.to_numpy(),
+                customdata=macro_assessment_labels.T.to_numpy(),
+                zmin=-1,
+                zmax=1,
+                colorscale=[
+                    [0.0, "#d9534f"],
+                    [0.49, "#d9534f"],
+                    [0.5, "#b7b7b7"],
+                    [0.51, "#5cb85c"],
+                    [1.0, "#5cb85c"],
+                ],
+                showscale=False,
+                xgap=1,
+                ygap=2,
+                hovertemplate="%{y}<br>%{x|%Y年%m月}: %{customdata}<extra></extra>",
+            )
+        )
+        assessment_figure.update_layout(
+            height=280,
+            margin=dict(l=20, r=20, t=20, b=40),
+            xaxis=dict(title="判定月", tickformat="%Y-%m"),
+            yaxis=dict(autorange="reversed"),
+        )
+        st.plotly_chart(assessment_figure, use_container_width=True)
+        st.caption(
+            "緑は改善・鈍化・緩和・順イールド、灰色は横ばい、"
+            "赤は悪化・上昇・引き締め・逆イールドです。各月時点の直近3か月変化で再判定します。"
+        )
     with st.expander("判定指標の推移を見る"):
         macro_trend_figure = make_subplots(
             rows=2,

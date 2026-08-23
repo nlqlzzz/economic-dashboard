@@ -3,6 +3,64 @@ from __future__ import annotations
 import pandas as pd
 
 
+MACRO_ASSESSMENT_SCORES = {
+    "改善": 1,
+    "鈍化": 1,
+    "緩和": 1,
+    "順イールド": 1,
+    "横ばい": 0,
+    "悪化": -1,
+    "上昇": -1,
+    "引き締め": -1,
+    "逆イールド": -1,
+}
+
+
+def build_us_macro_assessment_history(
+    cpi: pd.Series,
+    unemployment: pd.Series,
+    fed_funds: pd.Series,
+    ust_2y: pd.Series,
+    ust_10y: pd.Series,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """4つのマクロ評価を月次で再計算し、表示用の判定とスコアを返す。"""
+    cpi_yoy = cpi.pct_change(periods=12, fill_method=None) * 100
+    combined = pd.concat(
+        {
+            "cpi_yoy": cpi_yoy,
+            "unemployment": unemployment,
+            "fed_funds": fed_funds,
+            "ust_2y": ust_2y,
+            "ust_10y": ust_10y,
+        },
+        axis=1,
+    ).sort_index()
+    combined.index = combined.index.to_period("M").to_timestamp("M")
+    monthly = combined.groupby(level=0).last().ffill()
+
+    changes = monthly[["cpi_yoy", "unemployment", "fed_funds"]].diff(3)
+    labels = pd.DataFrame(index=monthly.index)
+    labels["景気"] = changes["unemployment"].map(
+        lambda value: _classify_historical_change(value, 0.2, "悪化", "改善")
+    )
+    labels["物価"] = changes["cpi_yoy"].map(
+        lambda value: _classify_historical_change(value, 0.2, "上昇", "鈍化")
+    )
+    labels["金融政策"] = changes["fed_funds"].map(
+        lambda value: _classify_historical_change(value, 0.25, "引き締め", "緩和")
+    )
+    labels["イールドカーブ"] = (monthly["ust_10y"] - monthly["ust_2y"]).map(
+        lambda value: (
+            None
+            if pd.isna(value)
+            else ("順イールド" if value >= 0 else "逆イールド")
+        )
+    )
+    labels = labels.dropna()
+    scores = labels.map(lambda value: MACRO_ASSESSMENT_SCORES[value]).astype(int)
+    return labels, scores
+
+
 def build_us_macro_trends(
     cpi: pd.Series,
     unemployment: pd.Series,
@@ -92,6 +150,14 @@ def _classify_change(change: float, threshold: float, up: str, down: str) -> str
     if change <= -threshold:
         return down
     return "横ばい"
+
+
+def _classify_historical_change(
+    change: float, threshold: float, up: str, down: str
+) -> str | None:
+    if pd.isna(change):
+        return None
+    return _classify_change(float(change), threshold, up, down)
 
 
 def _determine_regime(inflation: str, labor: str) -> tuple[str, str]:
