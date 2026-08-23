@@ -9,7 +9,11 @@ import streamlit as st
 from data_loader import load_data
 from indicators import DATA_SOURCE_LABELS, INDICATORS
 from macro_regime import assess_us_macro_regime
-from correlation_analysis import build_correlation_frame, correlation_pairs
+from correlation_analysis import (
+    build_correlation_frame,
+    correlation_pairs,
+    linear_regression_summary,
+)
 
 from utils import change_from_previous, calc_yoy, latest_value, normalize, percent_change_since
 
@@ -377,6 +381,7 @@ else:
                     x=scatter_data[scatter_x_name],
                     y=scatter_data[scatter_y_name],
                     mode="markers",
+                    name="データ",
                     marker=dict(size=8, opacity=0.7),
                     text=[observed.strftime("%Y-%m-%d") for observed in scatter_data.index],
                     hovertemplate=(
@@ -385,6 +390,26 @@ else:
                     ),
                 )
             )
+            regression = linear_regression_summary(
+                scatter_data[scatter_x_name], scatter_data[scatter_y_name]
+            )
+            if regression is not None:
+                slope, intercept, scatter_correlation = regression
+                line_x = [
+                    float(scatter_data[scatter_x_name].min()),
+                    float(scatter_data[scatter_x_name].max()),
+                ]
+                line_y = [slope * value + intercept for value in line_x]
+                scatter_figure.add_trace(
+                    go.Scatter(
+                        x=line_x,
+                        y=line_y,
+                        mode="lines",
+                        name="回帰線",
+                        line=dict(color="#ff7f0e", width=2),
+                        hoverinfo="skip",
+                    )
+                )
             scatter_figure.update_layout(
                 height=380,
                 margin=dict(l=20, r=20, t=20, b=50),
@@ -392,6 +417,14 @@ else:
                 yaxis_title=f"{scatter_y_name}（{correlation_labels[scatter_y_name]}）",
             )
             st.plotly_chart(scatter_figure, use_container_width=True)
+            if regression is None:
+                st.caption("回帰線と相関係数を計算できる有効なデータが不足しています。")
+            else:
+                st.caption(
+                    f"相関係数: {scatter_correlation:+.2f}｜"
+                    f"回帰式: y = {slope:.3f}x {intercept:+.3f}｜"
+                    f"データ数: {len(scatter_data)}"
+                )
 
         st.caption("相関係数は-1から+1です。相関は因果関係や将来の値動きを示すものではなく、景気・インフレ・リスク回避など市場環境によって変化します。")
 
