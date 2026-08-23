@@ -10,7 +10,7 @@ from streamlit_local_storage import LocalStorage
 
 from data_loader import load_data
 from indicators import DATA_SOURCE_LABELS, INDICATORS
-from macro_regime import assess_us_macro_regime
+from macro_regime import assess_us_macro_regime, build_us_macro_trends
 from correlation_analysis import (
     build_correlation_frame,
     correlation_pairs,
@@ -623,14 +623,26 @@ else:
 
 st.subheader("米国マクロ局面（参考）")
 try:
-    regime_start_date = (pd.Timestamp.today().normalize() - pd.DateOffset(months=20)).date()
+    regime_start_date = (pd.Timestamp.today().normalize() - pd.DateOffset(months=48)).date()
     with st.spinner("マクロ指標を確認しています…"):
+        macro_cpi = load_data("fred", "CPIAUCSL", str(regime_start_date))
+        macro_unemployment = load_data("fred", "UNRATE", str(regime_start_date))
+        macro_fed_funds = load_data("fred", "FEDFUNDS", str(regime_start_date))
+        macro_ust_2y = load_data("fred", "DGS2", str(regime_start_date))
+        macro_ust_10y = load_data("fred", "DGS10", str(regime_start_date))
         macro_regime = assess_us_macro_regime(
-            cpi=load_data("fred", "CPIAUCSL", str(regime_start_date)),
-            unemployment=load_data("fred", "UNRATE", str(regime_start_date)),
-            fed_funds=load_data("fred", "FEDFUNDS", str(regime_start_date)),
-            ust_2y=load_data("fred", "DGS2", str(regime_start_date)),
-            ust_10y=load_data("fred", "DGS10", str(regime_start_date)),
+            cpi=macro_cpi,
+            unemployment=macro_unemployment,
+            fed_funds=macro_fed_funds,
+            ust_2y=macro_ust_2y,
+            ust_10y=macro_ust_10y,
+        )
+        macro_trends = build_us_macro_trends(
+            cpi=macro_cpi,
+            unemployment=macro_unemployment,
+            fed_funds=macro_fed_funds,
+            ust_2y=macro_ust_2y,
+            ust_10y=macro_ust_10y,
         )
 
     st.info(f"**{macro_regime['regime']}**  \n{macro_regime['description']}")
@@ -663,6 +675,49 @@ try:
         delta=curve["status"],
         help=f"UST 10Y: {curve['ust_10y']:.2f}% / UST 2Y: {curve['ust_2y']:.2f}%（{curve['date']:%Y-%m-%d}）",
     )
+    with st.expander("判定指標の推移を見る"):
+        macro_trend_figure = make_subplots(
+            rows=2,
+            cols=2,
+            subplot_titles=list(macro_trends),
+            vertical_spacing=0.16,
+            horizontal_spacing=0.1,
+        )
+        for trend_index, (trend_name, trend_series) in enumerate(macro_trends.items()):
+            row = trend_index // 2 + 1
+            column = trend_index % 2 + 1
+            macro_trend_figure.add_trace(
+                go.Scatter(
+                    x=trend_series.index,
+                    y=trend_series,
+                    mode="lines",
+                    name=trend_name,
+                    hovertemplate="日付: %{x|%Y-%m-%d}<br>値: %{y:.2f}<extra></extra>",
+                ),
+                row=row,
+                col=column,
+            )
+            macro_trend_figure.update_yaxes(
+                title_text="pt" if trend_name == "10年−2年金利差" else "%",
+                row=row,
+                col=column,
+            )
+        macro_trend_figure.add_hline(
+            y=0,
+            line_width=1,
+            line_dash="dot",
+            line_color="gray",
+            row=2,
+            col=2,
+        )
+        macro_trend_figure.update_layout(
+            height=650,
+            showlegend=False,
+            hovermode="x unified",
+            margin=dict(l=20, r=20, t=45, b=35),
+        )
+        st.plotly_chart(macro_trend_figure, use_container_width=True)
+        st.caption("表示期間は直近約3年です。判定には各指標の最新値と3か月変化を使います。")
     st.caption("CPI前年比・失業率・FF金利の直近3か月変化と、米国債10年−2年の利回り差による参考判定です。投資判断や将来の市場動向を保証するものではありません。")
 except Exception as error:
     st.warning(f"米国マクロ局面を判定できませんでした: {error}")

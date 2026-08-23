@@ -3,6 +3,29 @@ from __future__ import annotations
 import pandas as pd
 
 
+def build_us_macro_trends(
+    cpi: pd.Series,
+    unemployment: pd.Series,
+    fed_funds: pd.Series,
+    ust_2y: pd.Series,
+    ust_10y: pd.Series,
+) -> dict[str, pd.Series]:
+    """マクロ局面判定に使う4系列の推移を表示用に整える。"""
+    cpi_yoy = cpi.pct_change(periods=12, fill_method=None).dropna() * 100
+    yield_curve = pd.concat(
+        {"ust_2y": ust_2y, "ust_10y": ust_10y}, axis=1
+    ).dropna()
+    trend_start = cpi_yoy.index.min()
+    return {
+        "CPI前年比": cpi_yoy,
+        "失業率": unemployment.dropna().loc[trend_start:],
+        "FF金利": fed_funds.dropna().loc[trend_start:],
+        "10年−2年金利差": (
+            yield_curve["ust_10y"] - yield_curve["ust_2y"]
+        ).loc[trend_start:],
+    }
+
+
 def assess_us_macro_regime(
     cpi: pd.Series,
     unemployment: pd.Series,
