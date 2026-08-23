@@ -5,6 +5,7 @@ from datetime import date
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from streamlit_local_storage import LocalStorage
 
 from data_loader import load_data
 from indicators import DATA_SOURCE_LABELS, INDICATORS
@@ -17,6 +18,7 @@ from correlation_analysis import (
 )
 
 from utils import change_from_previous, calc_yoy, latest_value, normalize, percent_change_since
+from watchlist_storage import dump_watchlists, load_watchlists
 
 
 st.set_page_config(page_title="市場ダッシュボード", layout="wide")
@@ -116,6 +118,8 @@ WATCHLISTS: dict[str, set[str]] = {
     },
 }
 
+WATCHLIST_STORAGE_KEY = "economic_dashboard_watchlists_v1"
+
 with st.sidebar:
     st.header("表示設定")
     today = pd.Timestamp.today().normalize()
@@ -142,6 +146,36 @@ with st.sidebar:
             for name in INDICATORS:
                 st.session_state[f"show_{name}_default_v2"] = name in watchlist_indicators
 
+    browser_storage = LocalStorage(key="watchlist_browser_storage")
+    saved_watchlists = load_watchlists(
+        browser_storage.getItem(WATCHLIST_STORAGE_KEY), INDICATORS
+    )
+    with st.expander("保存したウォッチリスト", expanded=bool(saved_watchlists)):
+        if not saved_watchlists:
+            st.caption("保存済みのウォッチリストはありません。")
+        else:
+            saved_watchlist_name = st.selectbox(
+                "保存済みリスト", list(saved_watchlists), key="saved_watchlist_name"
+            )
+            saved_left, saved_right = st.columns(2)
+            with saved_left:
+                if st.button("呼び出す", use_container_width=True):
+                    selected_watchlist = set(saved_watchlists[saved_watchlist_name])
+                    for name in INDICATORS:
+                        st.session_state[f"show_{name}_default_v2"] = (
+                            name in selected_watchlist
+                        )
+            with saved_right:
+                if st.button("削除", use_container_width=True):
+                    updated_watchlists = dict(saved_watchlists)
+                    del updated_watchlists[saved_watchlist_name]
+                    browser_storage.setItem(
+                        WATCHLIST_STORAGE_KEY,
+                        dump_watchlists(updated_watchlists),
+                        key="delete_saved_watchlist",
+                    )
+                    st.success(f「{saved_watchlist_name}」を削除しました。")
+
     if st.button("すべてのチェックを外す", use_container_width=True):
         for name in INDICATORS:
             st.session_state[f"show_{name}_default_v2"] = False
@@ -156,6 +190,28 @@ with st.sidebar:
                 is_default = name in {"日経平均株価", "S&P 500指数"}
                 if info["category"] == category and st.checkbox(name, value=is_default, key=f"show_{name}_default_v2"):
                     selected_names.append(name)
+
+    with st.expander("現在の選択を保存・更新"):
+        st.caption(
+            "同じ名前で保存すると内容を更新します。保存先は、このブラウザだけです。"
+        )
+        new_watchlist_name = st.text_input(
+            "ウォッチリスト名", max_chars=40, key="new_watchlist_name"
+        ).strip()
+        if st.button("現在の選択を保存", use_container_width=True):
+            if not new_watchlist_name:
+                st.warning("ウォッチリスト名を入力してください。")
+            elif not selected_names:
+                st.warning("保存する指標を一つ以上選んでください。")
+            else:
+                updated_watchlists = dict(saved_watchlists)
+                updated_watchlists[new_watchlist_name] = selected_names
+                browser_storage.setItem(
+                    WATCHLIST_STORAGE_KEY,
+                    dump_watchlists(updated_watchlists),
+                    key="save_current_watchlist",
+                )
+                st.success(f「{new_watchlist_name}」をブラウザに保存しました。")
 
 if not selected_names:
     st.info("左のメニューから、表示する指標を一つ以上選んでください。")
