@@ -174,7 +174,7 @@ with st.sidebar:
                         dump_watchlists(updated_watchlists),
                         key="delete_saved_watchlist",
                     )
-                    st.success(f「{saved_watchlist_name}」を削除しました。")
+                    st.success(f"「{saved_watchlist_name}」を削除しました。")
 
     if st.button("すべてのチェックを外す", use_container_width=True):
         for name in INDICATORS:
@@ -211,7 +211,7 @@ with st.sidebar:
                     dump_watchlists(updated_watchlists),
                     key="save_current_watchlist",
                 )
-                st.success(f「{new_watchlist_name}」をブラウザに保存しました。")
+                st.success(f"「{new_watchlist_name}」をブラウザに保存しました。")
 
 if not selected_names:
     st.info("左のメニューから、表示する指標を一つ以上選んでください。")
