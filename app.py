@@ -12,6 +12,7 @@ from data_loader import load_data
 from indicators import DATA_SOURCE_LABELS, INDICATORS
 from macro_regime import (
     assess_us_macro_regime,
+    build_macro_focus_guide,
     build_us_macro_assessment_history,
     build_us_macro_trends,
 )
@@ -657,6 +658,7 @@ try:
                 ust_10y=macro_ust_10y,
             )
         )
+        macro_focus_guide = build_macro_focus_guide(macro_regime)
 
     st.info(f"**{macro_regime['regime']}**  \n{macro_regime['description']}")
     inflation = macro_regime["inflation"]
@@ -688,6 +690,18 @@ try:
         delta=curve["status"],
         help=f"UST 10Y: {curve['ust_10y']:.2f}% / UST 2Y: {curve['ust_2y']:.2f}%（{curve['date']:%Y-%m-%d}）",
     )
+    with st.expander("現在の局面で確認したい指標・セクター", expanded=True):
+        st.caption("各評価に関連する指標を、確認の観点とともに参考表示します。")
+        for focus_index, focus in enumerate(macro_focus_guide):
+            if focus_index % 2 == 0:
+                focus_columns = st.columns(2)
+            focus_card = focus_columns[focus_index % 2].container(border=True)
+            focus_card.markdown(f"**{focus['dimension']}｜{focus['status']}**")
+            focus_card.write("・".join(focus["indicators"]))
+            focus_card.caption(focus["reason"])
+        st.caption(
+            "局面判定に関連して値動きを確認しやすい候補であり、上昇・下落の予測や売買推奨ではありません。"
+        )
     with st.expander("過去の評価と比較する", expanded=True):
         assessment_figure = go.Figure(
             go.Heatmap(

@@ -16,6 +16,86 @@ MACRO_ASSESSMENT_SCORES = {
 }
 
 
+MACRO_FOCUS_RULES = {
+    "labor": {
+        "改善": (
+            ["一般消費財（XLY）", "資本財・サービス（XLI）", "S&P 500指数"],
+            "雇用の改善局面では、個人消費や企業活動の強さが続くかを確認します。",
+        ),
+        "悪化": (
+            ["VIX指数", "生活必需品（XLP）", "公益事業（XLU）"],
+            "雇用の悪化局面では、市場の警戒度とディフェンシブ業種の相対的な動きを確認します。",
+        ),
+        "横ばい": (
+            ["S&P 500指数", "一般消費財（XLY）", "生活必需品（XLP）"],
+            "雇用の方向感が乏しいため、景気敏感とディフェンシブの差を確認します。",
+        ),
+    },
+    "inflation": {
+        "上昇": (
+            ["WTI原油先物", "エネルギー（XLE）", "素材（XLB）"],
+            "物価上昇局面では、インフレ要因になりやすい商品と関連業種を確認します。",
+        ),
+        "鈍化": (
+            ["UST 10Y", "情報技術（XLK）", "一般消費財（XLY）"],
+            "物価鈍化局面では、長期金利と金利感応度の高い業種を確認します。",
+        ),
+        "横ばい": (
+            ["CPI", "UST 10Y", "S&P 500指数"],
+            "物価の方向感が乏しいため、CPIと長期金利、市場全体の反応を確認します。",
+        ),
+    },
+    "policy": {
+        "引き締め": (
+            ["FF金利", "UST 2Y", "USD/JPY"],
+            "金融引き締め局面では、政策金利に敏感な短期金利と為替を確認します。",
+        ),
+        "緩和": (
+            ["FF金利", "情報技術（XLK）", "不動産（XLRE）"],
+            "金融緩和局面では、金利低下の影響を受けやすい業種を確認します。",
+        ),
+        "横ばい": (
+            ["FF金利", "UST 2Y", "UST 10Y"],
+            "政策金利が横ばいの局面では、短期・長期金利の次の方向を確認します。",
+        ),
+    },
+    "curve": {
+        "順イールド": (
+            ["UST 2Y", "UST 10Y", "金融（XLF）"],
+            "順イールドでは、長短金利差と金融セクターの反応を確認します。",
+        ),
+        "逆イールド": (
+            ["UST 2Y", "UST 10Y", "VIX指数"],
+            "逆イールドでは、長短金利差の変化と市場の警戒度を確認します。",
+        ),
+    },
+}
+
+
+def build_macro_focus_guide(regime: dict[str, object]) -> list[dict[str, object]]:
+    """現在のマクロ評価に対応する注目指標と確認理由を返す。"""
+    dimensions = [
+        ("labor", "景気"),
+        ("inflation", "物価"),
+        ("policy", "金融政策"),
+        ("curve", "イールドカーブ"),
+    ]
+    guide = []
+    for key, label in dimensions:
+        assessment = regime[key]
+        status = assessment["status"]
+        indicators, reason = MACRO_FOCUS_RULES[key][status]
+        guide.append(
+            {
+                "dimension": label,
+                "status": status,
+                "indicators": indicators,
+                "reason": reason,
+            }
+        )
+    return guide
+
+
 def build_us_macro_assessment_history(
     cpi: pd.Series,
     unemployment: pd.Series,
