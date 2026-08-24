@@ -8,7 +8,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 from streamlit_local_storage import LocalStorage
 
-from data_loader import load_data
+from data_loader import load_data, load_indicator_data
 from economic_calendar import (
     OFFICIAL_SCHEDULE_URLS,
     build_us_economic_events,
@@ -250,12 +250,19 @@ with st.spinner("データを取得しています…"):
     for name in selected_names:
         info = INDICATORS[name]
         try:
-            series = load_data(info["source"], info["ticker"], str(start_date))
+            series = load_indicator_data(info, str(start_date))
+            source_metadata = dict(series.attrs)
             if info.get("yoy", False):
                 series = calc_yoy(series)
             if normalize_values:
                 series = normalize(series)
+            series.attrs.update(source_metadata)
             series_to_plot[name] = series
+            if series.attrs.get("is_fallback"):
+                errors.append(
+                    f"{name}: 一次データを取得できないため、"
+                    f"{series.attrs['fallback_label']}（{series.attrs['ticker']}）を表示しています。"
+                )
         except Exception as error:
             errors.append(f"{name}: {error}")
 
@@ -284,7 +291,8 @@ if graph_display_mode == "左右の軸":
 
 def chart_label(name: str) -> str:
     info = INDICATORS[name]
-    label = f"{name}（前年比 %）" if info.get("yoy") else f"{name}（{info['unit']}）"
+    unit = series_to_plot[name].attrs.get("unit", info["unit"])
+    label = f"{name}（前年比 %）" if info.get("yoy") else f"{name}（{unit}）"
     if normalize_values:
         label = f"{name}（開始日=100）"
     return label
@@ -294,7 +302,11 @@ def chart_axis_title(name: str) -> str:
     if normalize_values:
         return "100基準"
     info = INDICATORS[name]
-    return "前年比 %" if info.get("yoy") else info["unit"]
+    return (
+        "前年比 %"
+        if info.get("yoy")
+        else series_to_plot[name].attrs.get("unit", info["unit"])
+    )
 
 
 if graph_display_mode == "個別グラフ":
@@ -371,7 +383,11 @@ for card_index, (name, series) in enumerate(card_items):
     card = column.container(border=True)
     observed_at, value = latest_value(series)
     info = INDICATORS[name]
-    suffix = "（前年比 %）" if info.get("yoy") else info["unit"]
+    suffix = (
+        "（前年比 %）"
+        if info.get("yoy")
+        else series.attrs.get("unit", info["unit"])
+    )
     display_value = f"{value:,.2f}" if normalize_values else f"{value:,.2f} {suffix}"
     previous_change = change_from_previous(series)
     if previous_change is None:
@@ -389,7 +405,10 @@ for card_index, (name, series) in enumerate(card_items):
     else:
         movement_label = "→ 横ばい"
     importance_label = "★ 主要" if name in KEY_MARKET_INDICATORS else "通常"
-    source_label = DATA_SOURCE_LABELS.get(info["source"], info["source"])
+    actual_source = series.attrs.get("source", info["source"])
+    source_label = DATA_SOURCE_LABELS.get(actual_source, actual_source)
+    if series.attrs.get("is_fallback"):
+        source_label = f"{source_label}・{series.attrs['ticker']}（代替）"
     card.caption(f"{importance_label}｜{movement_label}")
     card.metric(name, display_value, delta=delta, help=f"観測日: {observed_at:%Y-%m-%d}")
     card.caption(f"データ日: {observed_at:%Y-%m-%d}｜データ元: {source_label}")
@@ -590,7 +609,7 @@ else:
         for name in correlation_names:
             info = INDICATORS[name]
             try:
-                series = load_data(info["source"], info["ticker"], str(correlation_start_date))
+                series = load_indicator_data(info, str(correlation_start_date))
                 correlation_series[name] = series
                 if info.get("correlation_method"):
                     correlation_methods[name] = info["correlation_method"]

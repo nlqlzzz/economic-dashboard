@@ -22,6 +22,38 @@ def load_data(source: str, ticker: str, start_date: str) -> pd.Series:
     raise ValueError(f"未対応のデータソースです: {source}")
 
 
+def load_indicator_data(info: dict[str, object], start_date: str) -> pd.Series:
+    """一次ティッカーを取得し、失敗時は設定済みの代替候補を順に試す。"""
+    candidates = [
+        {
+            "source": info["source"],
+            "ticker": info["ticker"],
+            "label": None,
+            "unit": info["unit"],
+        },
+        *info.get("fallbacks", []),
+    ]
+    errors = []
+    for index, candidate in enumerate(candidates):
+        try:
+            series = load_data(
+                str(candidate["source"]), str(candidate["ticker"]), start_date
+            )
+            series.attrs.update(
+                {
+                    "source": candidate["source"],
+                    "ticker": candidate["ticker"],
+                    "unit": candidate.get("unit", info["unit"]),
+                    "is_fallback": index > 0,
+                    "fallback_label": candidate.get("label"),
+                }
+            )
+            return series
+        except Exception as error:
+            errors.append(f"{candidate['source']}:{candidate['ticker']} ({error})")
+    raise ValueError(" / ".join(errors))
+
+
 def _load_fred(ticker: str, start_date: str) -> pd.Series:
     url = "https://fred.stlouisfed.org/graph/fredgraph.csv"
     response = requests.get(
