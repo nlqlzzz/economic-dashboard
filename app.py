@@ -9,6 +9,7 @@ from plotly.subplots import make_subplots
 from streamlit_local_storage import LocalStorage
 
 from data_loader import load_data, load_indicator_data
+from data_status import build_data_status_frame
 from economic_calendar import (
     OFFICIAL_SCHEDULE_URLS,
     build_us_economic_events,
@@ -494,6 +495,16 @@ st.caption(
     "画面内の注意表示です。直前観測値比は指標ごとの直前データと比較します。"
     "外部通知や売買判断を行うものではありません。"
 )
+
+with st.expander("データ更新状況"):
+    st.dataframe(
+        build_data_status_frame(series_to_plot, INDICATORS, DATA_SOURCE_LABELS),
+        hide_index=True,
+        use_container_width=True,
+    )
+    st.caption(
+        "データ最終日は系列の最新観測日、取得確認日時はキャッシュ内データを取得した日本時間です。"
+    )
 
 with st.expander("データ一覧"):
     table = pd.concat(series_to_plot, axis=1)
