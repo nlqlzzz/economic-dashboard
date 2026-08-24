@@ -65,6 +65,14 @@ INDICATORS = {
         "unit": "ポイント",
         "yoy": False,
         "category": "マーケット",
+        "fallbacks": [
+            {
+                "source": "yfinance",
+                "ticker": "SOXX",
+                "unit": "米ドル",
+                "label": "iShares Semiconductor ETF（近似）",
+            }
+        ],
     },
     "VIX指数": {
         "source": "yfinance",
@@ -338,6 +346,14 @@ INDICATORS = {
         "unit": "ポイント",
         "yoy": False,
         "category": "マーケット",
+        "fallbacks": [
+            {
+                "source": "yfinance",
+                "ticker": "ASHR",
+                "unit": "米ドル",
+                "label": "中国A株ETF（近似）",
+            }
+        ],
     },
     "インド：NIFTY 50": {
         "source": "yfinance",
@@ -345,6 +361,14 @@ INDICATORS = {
         "unit": "ポイント",
         "yoy": False,
         "category": "マーケット",
+        "fallbacks": [
+            {
+                "source": "yfinance",
+                "ticker": "INDA",
+                "unit": "米ドル",
+                "label": "インド株ETF（近似）",
+            }
+        ],
     },
     "ベトナム：VN-Index": {
         "source": "yfinance",
@@ -352,6 +376,14 @@ INDICATORS = {
         "unit": "ポイント",
         "yoy": False,
         "category": "マーケット",
+        "fallbacks": [
+            {
+                "source": "yfinance",
+                "ticker": "VNM",
+                "unit": "米ドル",
+                "label": "ベトナム株ETF（近似）",
+            }
+        ],
     },
     "ドイツ：DAX": {
         "source": "yfinance",
@@ -359,6 +391,14 @@ INDICATORS = {
         "unit": "ポイント",
         "yoy": False,
         "category": "マーケット",
+        "fallbacks": [
+            {
+                "source": "yfinance",
+                "ticker": "EWG",
+                "unit": "米ドル",
+                "label": "ドイツ株ETF（近似）",
+            }
+        ],
     },
     "スペイン：IBEX 35": {
         "source": "yfinance",
@@ -366,6 +406,14 @@ INDICATORS = {
         "unit": "ポイント",
         "yoy": False,
         "category": "マーケット",
+        "fallbacks": [
+            {
+                "source": "yfinance",
+                "ticker": "EWP",
+                "unit": "米ドル",
+                "label": "スペイン株ETF（近似）",
+            }
+        ],
     },
     "ポーランド：NASDAQ Poland": {
         "source": "fred",
@@ -373,6 +421,14 @@ INDICATORS = {
         "unit": "ポイント",
         "yoy": False,
         "category": "マーケット",
+        "fallbacks": [
+            {
+                "source": "yfinance",
+                "ticker": "EPOL",
+                "unit": "米ドル",
+                "label": "ポーランド株ETF（近似）",
+            }
+        ],
     },
     "メキシコ：S&P/BMV IPC": {
         "source": "yfinance",
@@ -380,6 +436,14 @@ INDICATORS = {
         "unit": "ポイント",
         "yoy": False,
         "category": "マーケット",
+        "fallbacks": [
+            {
+                "source": "yfinance",
+                "ticker": "EWW",
+                "unit": "米ドル",
+                "label": "メキシコ株ETF（近似）",
+            }
+        ],
     },
     "オーストラリア：S&P/ASX 200": {
         "source": "yfinance",
@@ -387,5 +451,13 @@ INDICATORS = {
         "unit": "ポイント",
         "yoy": False,
         "category": "マーケット",
+        "fallbacks": [
+            {
+                "source": "yfinance",
+                "ticker": "EWA",
+                "unit": "米ドル",
+                "label": "オーストラリア株ETF（近似）",
+            }
+        ],
     },
 }
