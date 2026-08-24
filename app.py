@@ -22,6 +22,7 @@ from macro_regime import (
     build_us_macro_assessment_history,
     build_us_macro_trends,
 )
+from market_alerts import detect_market_moves
 from correlation_analysis import (
     build_correlation_frame,
     correlation_pairs,
@@ -409,6 +410,55 @@ for card_index, (name, series) in enumerate(card_items):
 st.subheader("騰落率")
 st.caption("直前値比は直前の観測値、その他は指定時点以前で最も新しい観測値を基準に計算します。")
 st.dataframe(pd.DataFrame(change_rows), hide_index=True, use_container_width=True)
+
+st.subheader("急変検知")
+with st.expander("検知する騰落率を設定"):
+    alert_threshold_columns = st.columns(3)
+    alert_thresholds = {
+        "直前観測値比": alert_threshold_columns[0].number_input(
+            "直前観測値比（%）",
+            min_value=0.1,
+            value=2.0,
+            step=0.5,
+            key="alert_previous_threshold",
+        ),
+        "1週間": alert_threshold_columns[1].number_input(
+            "1週間（%）",
+            min_value=0.1,
+            value=5.0,
+            step=0.5,
+            key="alert_week_threshold",
+        ),
+        "1か月": alert_threshold_columns[2].number_input(
+            "1か月（%）",
+            min_value=0.1,
+            value=10.0,
+            step=0.5,
+            key="alert_month_threshold",
+        ),
+    }
+
+market_move_alerts = detect_market_moves(series_to_plot, alert_thresholds)
+if market_move_alerts.empty:
+    st.success("設定した閾値を超える動きはありません。")
+else:
+    st.warning(f"設定した閾値を超えた動きが{len(market_move_alerts)}件あります。")
+    alert_display = market_move_alerts.copy()
+    alert_display["方向"] = alert_display["方向"].map(
+        {"上昇": "🔴 上昇", "下落": "🔵 下落", "横ばい": "横ばい"}
+    )
+    alert_display["騰落率"] = alert_display["騰落率"].map(lambda rate: f"{rate:+.2f}%")
+    alert_display["閾値"] = alert_display["閾値"].map(lambda value: f"±{value:.1f}%")
+    alert_display["データ日"] = alert_display["データ日"].dt.strftime("%Y-%m-%d")
+    st.dataframe(
+        alert_display.drop(columns="重要度"),
+        hide_index=True,
+        use_container_width=True,
+    )
+st.caption(
+    "画面内の注意表示です。直前観測値比は指標ごとの直前データと比較します。"
+    "外部通知や売買判断を行うものではありません。"
+)
 
 with st.expander("データ一覧"):
     table = pd.concat(series_to_plot, axis=1)
