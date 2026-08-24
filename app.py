@@ -25,6 +25,11 @@ from macro_regime import (
 )
 from market_alerts import detect_market_moves
 from market_summary import build_market_summary
+from regime_returns import (
+    REGIME_ASSET_DEFINITIONS,
+    analyze_regime_forward_performance,
+    current_regime_labels,
+)
 from correlation_analysis import (
     build_correlation_frame,
     correlation_pairs,
@@ -774,7 +779,7 @@ else:
 
 st.subheader("米国マクロ局面（参考）")
 try:
-    regime_start_date = (pd.Timestamp.today().normalize() - pd.DateOffset(months=48)).date()
+    regime_start_date = (pd.Timestamp.today().normalize() - pd.DateOffset(years=15)).date()
     with st.spinner("マクロ指標を確認しています…"):
         macro_cpi = load_data("fred", "CPIAUCSL", str(regime_start_date))
         macro_unemployment = load_data("fred", "UNRATE", str(regime_start_date))
@@ -805,6 +810,15 @@ try:
             )
         )
         macro_focus_guide = build_macro_focus_guide(macro_regime)
+
+    macro_trends = {
+        name: series.loc[
+            pd.Timestamp.today().normalize() - pd.DateOffset(months=36) :
+        ]
+        for name, series in macro_trends.items()
+    }
+    macro_assessment_labels_display = macro_assessment_labels.tail(48)
+    macro_assessment_scores_display = macro_assessment_scores.tail(48)
 
     st.info(f"**{macro_regime['regime']}**  \n{macro_regime['description']}")
     inflation = macro_regime["inflation"]
@@ -851,10 +865,10 @@ try:
     with st.expander("過去の評価と比較する", expanded=True):
         assessment_figure = go.Figure(
             go.Heatmap(
-                x=macro_assessment_scores.index,
-                y=list(macro_assessment_scores.columns),
-                z=macro_assessment_scores.T.to_numpy(),
-                customdata=macro_assessment_labels.T.to_numpy(),
+                x=macro_assessment_scores_display.index,
+                y=list(macro_assessment_scores_display.columns),
+                z=macro_assessment_scores_display.T.to_numpy(),
+                customdata=macro_assessment_labels_display.T.to_numpy(),
                 zmin=-1,
                 zmax=1,
                 colorscale=[
@@ -924,6 +938,96 @@ try:
         )
         st.plotly_chart(macro_trend_figure, use_container_width=True)
         st.caption("表示期間は直近約3年です。判定には各指標の最新値と3か月変化を使います。")
+    st.markdown("#### レジーム別リターン分析")
+    st.caption(
+        "現在と同じ、または近い4つのマクロ評価だった過去の月から、"
+        "その後の資産パフォーマンスを集計します。"
+    )
+    regime_match_mode = st.radio(
+        "過去局面の一致条件",
+        ["完全一致（4評価すべて）", "近似を含む（4評価中3つ以上）"],
+        horizontal=True,
+        key="regime_return_match_mode",
+    )
+    active_regime_labels = current_regime_labels(macro_regime)
+    st.caption(
+        "現在の評価: "
+        + " / ".join(
+            f"{dimension}={status}"
+            for dimension, status in active_regime_labels.items()
+        )
+    )
+    if st.button(
+        "過去リターンを分析",
+        key="run_regime_return_analysis",
+        use_container_width=True,
+    ):
+        st.session_state["show_regime_return_analysis"] = True
+
+    if st.session_state.get("show_regime_return_analysis", False):
+        regime_asset_series: dict[str, pd.Series] = {}
+        regime_asset_methods: dict[str, str] = {}
+        regime_asset_errors: list[str] = []
+        with st.spinner("過去の各資産リターンを集計しています…"):
+            for display_name, (
+                indicator_name,
+                method,
+            ) in REGIME_ASSET_DEFINITIONS.items():
+                try:
+                    regime_asset_series[display_name] = load_indicator_data(
+                        INDICATORS[indicator_name], str(regime_start_date)
+                    )
+                    regime_asset_methods[display_name] = method
+                except Exception as asset_error:
+                    regime_asset_errors.append(f"{display_name}: {asset_error}")
+
+        for asset_error in regime_asset_errors:
+            st.warning(f"レジーム別リターン分析では {asset_error}")
+
+        if regime_asset_series:
+            minimum_dimensions = 4 if regime_match_mode.startswith("完全一致") else 3
+            regime_performance = analyze_regime_forward_performance(
+                regime_history=macro_assessment_labels,
+                current_labels=active_regime_labels,
+                asset_series=regime_asset_series,
+                methods_by_asset=regime_asset_methods,
+                minimum_matching_dimensions=minimum_dimensions,
+            )
+            for horizon_label in ["1か月後", "3か月後", "6か月後"]:
+                with st.expander(horizon_label, expanded=horizon_label == "3か月後"):
+                    horizon_table = regime_performance[
+                        regime_performance["期間"] == horizon_label
+                    ].copy()
+                    for column in ["平均", "中央値"]:
+                        horizon_table[column] = horizon_table.apply(
+                            lambda row: (
+                                "—"
+                                if pd.isna(row[column])
+                                else f"{row[column]:+.2f}{row['単位']}"
+                            ),
+                            axis=1,
+                        )
+                    horizon_table["上昇確率"] = horizon_table["上昇確率"].map(
+                        lambda value: "—" if pd.isna(value) else f"{value:.1f}%"
+                    )
+                    st.dataframe(
+                        horizon_table.drop(columns=["期間", "単位"]),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+            low_sample_rows = regime_performance[
+                regime_performance["注意"] == "サンプル少"
+            ]
+            if not low_sample_rows.empty:
+                st.warning(
+                    "サンプル数が12未満の組合せがあります。結果のばらつきが大きいため、"
+                    "平均値だけで判断しないでください。"
+                )
+            st.caption(
+                "サンプル数は一致した月次観測数です。3か月後・6か月後は計測期間が重なるため、"
+                "互いに独立した標本ではありません。米10年金利はリターンではなく変化幅（bp）、"
+                "TOPIXは1306 ETFによる近似です。過去の傾向であり、将来予測や投資助言ではありません。"
+            )
     st.caption("CPI前年比・失業率・FF金利の直近3か月変化と、米国債10年−2年の利回り差による参考判定です。投資判断や将来の市場動向を保証するものではありません。")
 except Exception as error:
     st.warning(f"米国マクロ局面を判定できませんでした: {error}")
