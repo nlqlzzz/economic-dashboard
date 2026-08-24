@@ -12,14 +12,17 @@ import yfinance as yf
 def load_data(source: str, ticker: str, start_date: str) -> pd.Series:
     """設定されたデータソースから時系列を取得して返す。"""
     if source == "fred":
-        return _load_fred(ticker, start_date)
-    if source == "yfinance":
-        return _load_yfinance(ticker, start_date)
-    if source == "mof_jgb":
-        return _load_mof_jgb(ticker, start_date)
-    if source == "us_jp_yield_spread":
-        return _load_us_jp_yield_spread(ticker, start_date)
-    raise ValueError(f"未対応のデータソースです: {source}")
+        series = _load_fred(ticker, start_date)
+    elif source == "yfinance":
+        series = _load_yfinance(ticker, start_date)
+    elif source == "mof_jgb":
+        series = _load_mof_jgb(ticker, start_date)
+    elif source == "us_jp_yield_spread":
+        series = _load_us_jp_yield_spread(ticker, start_date)
+    else:
+        raise ValueError(f"未対応のデータソースです: {source}")
+    series.attrs["fetched_at"] = pd.Timestamp.now(tz="Asia/Tokyo")
+    return series
 
 
 def load_indicator_data(info: dict[str, object], start_date: str) -> pd.Series:
