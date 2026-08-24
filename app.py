@@ -23,6 +23,7 @@ from macro_regime import (
     build_us_macro_trends,
 )
 from market_alerts import detect_market_moves
+from market_summary import build_market_summary
 from correlation_analysis import (
     build_correlation_frame,
     correlation_pairs,
@@ -405,6 +406,21 @@ for card_index, (name, series) in enumerate(card_items):
             "年初来": format_rate(percent_change_since(series, pd.Timestamp(year=observed_at.year, month=1, day=1))),
             "表示期間": format_rate(percent_change_since(series, pd.Timestamp(start_date))),
         }
+    )
+
+market_summary = build_market_summary(series_to_plot, INDICATORS)
+st.subheader("今日のマーケット")
+st.info(f"**{market_summary['headline']}**")
+if market_summary["bullets"]:
+    for summary_line in market_summary["bullets"]:
+        st.markdown(f"- {summary_line}")
+else:
+    st.caption("要約できる直前観測値がありません。")
+summary_latest_date = market_summary["latest_date"]
+if summary_latest_date is not None:
+    st.caption(
+        f"選択中の指標の直前観測値比によるルールベース要約です。最新データ日: "
+        f"{summary_latest_date:%Y-%m-%d}。ニュースや将来予測は含みません。"
     )
 
 st.subheader("騰落率")
