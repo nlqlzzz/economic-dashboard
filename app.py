@@ -9,6 +9,12 @@ from plotly.subplots import make_subplots
 from streamlit_local_storage import LocalStorage
 
 from data_loader import load_data
+from economic_calendar import (
+    OFFICIAL_SCHEDULE_URLS,
+    build_us_economic_events,
+    calendar_display_frame,
+    latest_event_results,
+)
 from indicators import DATA_SOURCE_LABELS, INDICATORS
 from macro_regime import (
     assess_us_macro_regime,
@@ -410,6 +416,50 @@ with st.expander("データ一覧"):
 
 st.divider()
 st.header("参考情報")
+
+st.subheader("米国経済イベントカレンダー（参考）")
+calendar_months = st.radio(
+    "表示期間",
+    ["今後3か月", "今後6か月", "収録分すべて"],
+    horizontal=True,
+    key="economic_calendar_period",
+)
+calendar_end_offsets = {
+    "今後3か月": pd.DateOffset(months=3),
+    "今後6か月": pd.DateOffset(months=6),
+    "収録分すべて": pd.DateOffset(years=2),
+}
+try:
+    calendar_today = pd.Timestamp.now(tz="Asia/Tokyo").normalize()
+    calendar_data_start = (calendar_today - pd.DateOffset(months=18)).date()
+    with st.spinner("経済イベントと直近結果を確認しています…"):
+        economic_events = build_us_economic_events()
+        event_results = latest_event_results(
+            cpi=load_data("fred", "CPIAUCSL", str(calendar_data_start)),
+            unemployment=load_data("fred", "UNRATE", str(calendar_data_start)),
+            payrolls=load_data("fred", "PAYEMS", str(calendar_data_start)),
+            fed_funds=load_data("fred", "DFEDTARU", str(calendar_data_start)),
+        )
+        calendar_table = calendar_display_frame(
+            economic_events,
+            event_results,
+            start=calendar_today,
+            end=calendar_today + calendar_end_offsets[calendar_months],
+        )
+    if calendar_table.empty:
+        st.info("選択期間に収録済みのイベントはありません。")
+    else:
+        st.dataframe(calendar_table, hide_index=True, use_container_width=True)
+    st.caption(
+        "日程はBLS（2026年12月まで）とFRB（2027年12月まで）の公表情報を日本時間へ変換。"
+        "予想値は公式データにないため表示しません。直近結果・前回値はFREDの最新系列値です。"
+    )
+    st.markdown(
+        f"日程元: [BLS]({OFFICIAL_SCHEDULE_URLS['BLS']}) / "
+        f"[FRB]({OFFICIAL_SCHEDULE_URLS['FRB']})"
+    )
+except Exception as error:
+    st.warning(f"経済イベントカレンダーを表示できませんでした: {error}")
 
 st.subheader("相関分析（参考）")
 st.caption(
