@@ -74,7 +74,8 @@ st.markdown(
         }
         [data-testid="stAppViewContainer"] h1 {
             font-size: clamp(1.35rem, 6.2vw, 1.7rem);
-            line-height: 1.25;
+            line-height: 1.5;
+            padding-top: 1.5rem;
             overflow-wrap: anywhere;
         }
         [data-testid="stAppViewContainer"] h2 {
