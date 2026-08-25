@@ -30,6 +30,7 @@ from macro_regime import (
     build_us_macro_trends,
 )
 from market_alerts import detect_market_moves
+from market_hypotheses import build_market_factor_hypotheses
 from market_stress import (
     STRESS_INPUT_INDICATORS,
     calculate_market_stress,
@@ -64,6 +65,32 @@ from correlation_analysis import (
 
 from utils import change_from_previous, calc_yoy, latest_value, normalize, percent_change_since
 from watchlist_storage import dump_watchlists, load_watchlists
+
+
+def load_market_stress_context(start_date: str) -> dict[str, object]:
+    """Market Stress Scoreと要因仮説で共有する系列・診断結果を取得する。"""
+    series: dict[str, pd.Series] = {}
+    load_errors: list[str] = []
+    fallbacks: list[str] = []
+    for indicator_name in STRESS_INPUT_INDICATORS:
+        try:
+            indicator_series = load_indicator_data(
+                INDICATORS[indicator_name], start_date
+            )
+            series[indicator_name] = indicator_series
+            if indicator_series.attrs.get("is_fallback"):
+                fallbacks.append(
+                    f"{indicator_name}: {indicator_series.attrs['fallback_label']}"
+                    f"（{indicator_series.attrs['ticker']}）"
+                )
+        except Exception as error:
+            load_errors.append(f"{indicator_name}: {error}")
+    return {
+        "series": series,
+        "load_errors": load_errors,
+        "fallbacks": fallbacks,
+        "result": calculate_market_stress(series),
+    }
 
 
 st.set_page_config(page_title="市場ダッシュボード", layout="wide")
@@ -738,33 +765,16 @@ with analysis_tab:
             - pd.DateOffset(years=5)
             - pd.DateOffset(days=120)
         ).date()
-        stress_series: dict[str, pd.Series] = {}
-        stress_load_errors: list[str] = []
-        stress_fallbacks: list[str] = []
         with st.spinner("市場ストレスの構成項目を確認しています…"):
-            for stress_indicator_name in STRESS_INPUT_INDICATORS:
-                try:
-                    stress_indicator_series = load_indicator_data(
-                        INDICATORS[stress_indicator_name], str(stress_history_start)
-                    )
-                    stress_series[stress_indicator_name] = stress_indicator_series
-                    if stress_indicator_series.attrs.get("is_fallback"):
-                        stress_fallbacks.append(
-                            f"{stress_indicator_name}: "
-                            f"{stress_indicator_series.attrs['fallback_label']}"
-                            f"（{stress_indicator_series.attrs['ticker']}）"
-                        )
-                except Exception as stress_error:
-                    stress_load_errors.append(
-                        f"{stress_indicator_name}: {stress_error}"
-                    )
+            stress_context = load_market_stress_context(str(stress_history_start))
+            st.session_state["market_stress_context"] = stress_context
 
-        for stress_load_error in stress_load_errors:
+        for stress_load_error in stress_context["load_errors"]:
             st.warning(f"Market Stress Scoreでは取得できない系列があります: {stress_load_error}")
-        for stress_fallback in stress_fallbacks:
+        for stress_fallback in stress_context["fallbacks"]:
             st.warning(f"Market Stress Scoreでは代替系列を使用します: {stress_fallback}")
 
-        stress_result = calculate_market_stress(stress_series)
+        stress_result = stress_context["result"]
         stress_score = stress_result["score"]
         if stress_score is None:
             st.warning(
@@ -1224,6 +1234,79 @@ with analysis_tab:
             delta=curve["status"],
             help=f"UST 10Y: {curve['ust_10y']:.2f}% / UST 2Y: {curve['ust_2y']:.2f}%（{curve['date']:%Y-%m-%d}）",
         )
+        st.markdown("#### 市場変動の要因仮説")
+        st.caption(
+            "Market Stress Scoreの構成項目、直近変化、米国マクロ評価から、"
+            "現在のデータと整合する要因候補を上位3件に整理します。"
+        )
+        if st.button(
+            "要因仮説を整理",
+            key="run_market_factor_hypotheses",
+            width="stretch",
+        ):
+            st.session_state["show_market_factor_hypotheses"] = True
+
+        if st.session_state.get("show_market_factor_hypotheses", False):
+            hypothesis_stress_start = (
+                pd.Timestamp.today().normalize()
+                - pd.DateOffset(years=5)
+                - pd.DateOffset(days=120)
+            ).date()
+            hypothesis_context = st.session_state.get("market_stress_context")
+            if hypothesis_context is None:
+                with st.spinner("要因仮説に必要な市場データを確認しています…"):
+                    hypothesis_context = load_market_stress_context(
+                        str(hypothesis_stress_start)
+                    )
+                    st.session_state["market_stress_context"] = hypothesis_context
+
+            hypothesis_result = build_market_factor_hypotheses(
+                stress_result=hypothesis_context["result"],
+                series_by_name=hypothesis_context["series"],
+                macro_regime=macro_regime,
+            )
+            for hypothesis_fallback in hypothesis_context["fallbacks"]:
+                st.warning(f"要因仮説では代替系列を使用します: {hypothesis_fallback}")
+            st.caption(
+                f"市場入力カバレッジ: {hypothesis_result['input_coverage']} / "
+                f"{hypothesis_result['total_inputs']}"
+            )
+            for hypothesis_index, hypothesis in enumerate(
+                hypothesis_result["hypotheses"]
+            ):
+                with st.expander(
+                    f"{hypothesis_index + 1}. {hypothesis['title']}｜"
+                    f"根拠の強さ: {hypothesis['strength']}",
+                    expanded=hypothesis_index == 0,
+                ):
+                    st.write(hypothesis["interpretation"])
+                    st.markdown("**整合する観測**")
+                    for observation in hypothesis["observations"]:
+                        st.write(f"- {observation}")
+                    st.caption(
+                        f"利用した観測: {hypothesis['observation_count']}件"
+                    )
+                    if hypothesis["counter_evidence"]:
+                        st.markdown("**反対材料・留意点**")
+                        for counter_evidence in hypothesis["counter_evidence"]:
+                            st.write(f"- {counter_evidence}")
+
+            hypothesis_unavailable = list(hypothesis_context["load_errors"])
+            hypothesis_unavailable.extend(hypothesis_result["unavailable"])
+            if hypothesis_unavailable:
+                with st.expander("利用できなかったデータ"):
+                    for unavailable_item in dict.fromkeys(hypothesis_unavailable):
+                        st.write(f"- {unavailable_item}")
+            observed_at = hypothesis_result["observed_at"]
+            observed_at_text = (
+                "不明" if observed_at is None else f"{observed_at:%Y-%m-%d}"
+            )
+            st.caption(
+                "ルールベースで観測の整合性を整理したもので、因果関係を特定するものでは"
+                "ありません。ニュース、企業固有要因、市場参加者のポジションは含みません。"
+                "将来予測、売買シグナル、投資助言ではありません。"
+                f" 市場データ基準日: {observed_at_text}。"
+            )
         with st.expander("現在の局面で確認したい指標・セクター", expanded=True):
             st.caption("各評価に関連する指標を、確認の観点とともに参考表示します。")
             for focus_index, focus in enumerate(macro_focus_guide):
