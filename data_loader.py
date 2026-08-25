@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from io import StringIO
+import time
+from typing import Callable
 
 import pandas as pd
 import requests
@@ -8,20 +11,82 @@ import streamlit as st
 import yfinance as yf
 
 
+MAX_FETCH_ATTEMPTS = 2
+RETRY_DELAY_SECONDS = 0.5
+
+
+@dataclass(frozen=True)
+class LoadFailure:
+    source: str
+    ticker: str
+    error_type: str
+    detail: str
+    attempts: int
+
+
+class SourceLoadError(ValueError):
+    """単一のデータ元・ティッカーで取得に失敗したことを表す。"""
+
+    def __init__(self, failure: LoadFailure):
+        self.failure = failure
+        super().__init__(_format_failure(failure))
+
+
+class IndicatorDataError(ValueError):
+    """一次・代替を含む全候補で取得に失敗したことを表す。"""
+
+    def __init__(self, failures: list[LoadFailure]):
+        self.failures = failures
+        detail = " / ".join(_format_failure(failure) for failure in failures)
+        super().__init__(f"全候補の取得に失敗しました: {detail}")
+
+
+class DataUnavailableError(ValueError):
+    """取得先が有効な時系列を返さなかったことを表す。"""
+
+
+class RetryFailure(Exception):
+    """再試行後の元例外と実際の試行回数を保持する。"""
+
+    def __init__(self, error: Exception, attempts: int):
+        self.error = error
+        self.attempts = attempts
+        super().__init__(str(error))
+
+
 @st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
 def load_data(source: str, ticker: str, start_date: str) -> pd.Series:
     """設定されたデータソースから時系列を取得して返す。"""
-    if source == "fred":
-        series = _load_fred(ticker, start_date)
-    elif source == "yfinance":
-        series = _load_yfinance(ticker, start_date)
-    elif source == "mof_jgb":
-        series = _load_mof_jgb(ticker, start_date)
-    elif source == "us_jp_yield_spread":
-        series = _load_us_jp_yield_spread(ticker, start_date)
-    else:
+    loaders: dict[str, Callable[[], pd.Series]] = {
+        "fred": lambda: _load_fred(ticker, start_date),
+        "yfinance": lambda: _load_yfinance(ticker, start_date),
+        "mof_jgb": lambda: _load_mof_jgb(ticker, start_date),
+        "us_jp_yield_spread": lambda: _load_us_jp_yield_spread(ticker, start_date),
+    }
+    if source not in loaders:
         raise ValueError(f"未対応のデータソースです: {source}")
-    series.attrs["fetched_at"] = pd.Timestamp.now(tz="Asia/Tokyo")
+
+    started_at = time.perf_counter()
+    try:
+        series, attempts = _load_with_retry(loaders[source])
+    except RetryFailure as retry_failure:
+        error = retry_failure.error
+        raise SourceLoadError(
+            LoadFailure(
+                source=source,
+                ticker=ticker,
+                error_type=_classify_error(error),
+                detail=str(error),
+                attempts=retry_failure.attempts,
+            )
+        ) from error
+    series.attrs.update(
+        {
+            "fetched_at": pd.Timestamp.now(tz="Asia/Tokyo"),
+            "fetch_attempts": attempts,
+            "fetch_duration_seconds": time.perf_counter() - started_at,
+        }
+    )
     return series
 
 
@@ -36,7 +101,7 @@ def load_indicator_data(info: dict[str, object], start_date: str) -> pd.Series:
         },
         *info.get("fallbacks", []),
     ]
-    errors = []
+    failures: list[LoadFailure] = []
     for index, candidate in enumerate(candidates):
         try:
             series = load_data(
@@ -52,9 +117,81 @@ def load_indicator_data(info: dict[str, object], start_date: str) -> pd.Series:
                 }
             )
             return series
+        except SourceLoadError as error:
+            failures.append(error.failure)
         except Exception as error:
-            errors.append(f"{candidate['source']}:{candidate['ticker']} ({error})")
-    raise ValueError(" / ".join(errors))
+            failures.append(
+                LoadFailure(
+                    source=str(candidate["source"]),
+                    ticker=str(candidate["ticker"]),
+                    error_type=_classify_error(error),
+                    detail=str(error),
+                    attempts=int(getattr(error, "fetch_attempts", 1)),
+                )
+            )
+    raise IndicatorDataError(failures)
+
+
+def _load_with_retry(
+    loader: Callable[[], pd.Series],
+    maximum_attempts: int = MAX_FETCH_ATTEMPTS,
+    retry_delay_seconds: float = RETRY_DELAY_SECONDS,
+) -> tuple[pd.Series, int]:
+    """一時障害だけを短く再試行し、成功した系列と試行回数を返す。"""
+    if maximum_attempts < 1:
+        raise ValueError("最大試行回数は1以上にしてください。")
+    for attempt in range(1, maximum_attempts + 1):
+        try:
+            return loader(), attempt
+        except Exception as error:
+            if attempt == maximum_attempts or not _is_transient_error(error):
+                raise RetryFailure(error, attempt) from error
+            time.sleep(retry_delay_seconds)
+    raise RuntimeError("データ取得の再試行が予期せず終了しました。")
+
+
+def _is_transient_error(error: Exception) -> bool:
+    if isinstance(
+        error,
+        (requests.Timeout, requests.ConnectionError, TimeoutError, ConnectionError),
+    ):
+        return True
+    if isinstance(error, DataUnavailableError):
+        return True
+    if isinstance(error, requests.HTTPError):
+        status_code = getattr(error.response, "status_code", None)
+        return status_code in {408, 429} or (
+            status_code is not None and 500 <= status_code < 600
+        )
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in ("timed out", "timeout", "temporarily unavailable", "rate limit")
+    )
+
+
+def _classify_error(error: Exception) -> str:
+    if isinstance(error, (requests.Timeout, TimeoutError)):
+        return "タイムアウト"
+    if isinstance(error, (requests.ConnectionError, ConnectionError)):
+        return "接続エラー"
+    if isinstance(error, requests.HTTPError):
+        status_code = getattr(error.response, "status_code", None)
+        return f"HTTP {status_code}" if status_code is not None else "HTTPエラー"
+    if isinstance(error, (KeyError, UnicodeError, pd.errors.ParserError)):
+        return "データ形式エラー"
+    if isinstance(error, DataUnavailableError):
+        return "データなし"
+    if isinstance(error, ValueError):
+        return "データなし・設定エラー"
+    return type(error).__name__
+
+
+def _format_failure(failure: LoadFailure) -> str:
+    return (
+        f"データ元={failure.source}, ティッカー={failure.ticker}, "
+        f"種別={failure.error_type}, 試行={failure.attempts}回, 詳細={failure.detail}"
+    )
 
 
 def _load_fred(ticker: str, start_date: str) -> pd.Series:
@@ -81,7 +218,9 @@ def _load_yfinance(ticker: str, start_date: str) -> pd.Series:
         progress=False,
     )
     if frame.empty:
-        raise ValueError(f"Yahoo Financeから「{ticker}」のデータを取得できませんでした。")
+        raise DataUnavailableError(
+            f"Yahoo Financeから「{ticker}」のデータを取得できませんでした。"
+        )
 
     # yfinanceのバージョンにより、列がMultiIndexになる場合がある。
     close = frame["Close"]

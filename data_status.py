@@ -48,6 +48,10 @@ def build_data_status_frame(
                 "更新頻度": freshness["更新頻度"],
                 "鮮度": freshness["鮮度"],
                 "遅延幅": freshness["遅延幅"],
+                "取得試行": _format_fetch_attempts(series.attrs.get("fetch_attempts")),
+                "取得時間": _format_fetch_duration(
+                    series.attrs.get("fetch_duration_seconds")
+                ),
                 "取得確認日時": _format_fetched_at(fetched_at),
                 "データ元": source_labels.get(actual_source, actual_source),
                 "実ティッカー": actual_ticker,
@@ -103,3 +107,16 @@ def _format_fetched_at(value: object) -> str:
     else:
         timestamp = timestamp.tz_convert("Asia/Tokyo")
     return timestamp.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _format_fetch_attempts(value: object) -> str:
+    if value is None:
+        return "—"
+    attempts = int(value)
+    return f"{attempts}回（再試行）" if attempts > 1 else "1回"
+
+
+def _format_fetch_duration(value: object) -> str:
+    if value is None:
+        return "—"
+    return f"{float(value):.2f}秒"

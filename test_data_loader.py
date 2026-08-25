@@ -2,8 +2,15 @@ import unittest
 from unittest.mock import patch
 
 import pandas as pd
+import requests
 
-from data_loader import load_indicator_data
+from data_loader import (
+    DataUnavailableError,
+    IndicatorDataError,
+    RetryFailure,
+    _load_with_retry,
+    load_indicator_data,
+)
 
 
 class IndicatorFallbackTest(unittest.TestCase):
@@ -53,8 +60,75 @@ class IndicatorFallbackTest(unittest.TestCase):
     def test_reports_all_candidates_when_none_are_available(self, mock_load_data) -> None:
         mock_load_data.side_effect = ValueError("unavailable")
 
-        with self.assertRaisesRegex(ValueError, "PRIMARY.*FALLBACK"):
+        with self.assertRaisesRegex(IndicatorDataError, "PRIMARY.*FALLBACK") as raised:
             load_indicator_data(self.info, "2026-08-01")
+
+        self.assertEqual(len(raised.exception.failures), 2)
+        self.assertEqual(raised.exception.failures[0].source, "yfinance")
+        self.assertEqual(raised.exception.failures[0].ticker, "PRIMARY")
+        self.assertEqual(
+            raised.exception.failures[0].error_type, "データなし・設定エラー"
+        )
+
+    @patch("data_loader.time.sleep")
+    def test_retries_transient_error_once(self, mock_sleep) -> None:
+        expected = pd.Series([100.0], index=pd.to_datetime(["2026-08-24"]))
+        loader = unittest.mock.Mock(
+            side_effect=[requests.Timeout("temporary timeout"), expected]
+        )
+
+        series, attempts = _load_with_retry(loader)
+
+        pd.testing.assert_series_equal(series, expected)
+        self.assertEqual(attempts, 2)
+        mock_sleep.assert_called_once()
+
+    @patch("data_loader.time.sleep")
+    def test_does_not_retry_permanent_error(self, mock_sleep) -> None:
+        loader = unittest.mock.Mock(side_effect=ValueError("invalid ticker"))
+
+        with self.assertRaises(RetryFailure) as raised:
+            _load_with_retry(loader)
+
+        self.assertEqual(loader.call_count, 1)
+        mock_sleep.assert_not_called()
+        self.assertIsInstance(raised.exception.error, ValueError)
+
+    @patch("data_loader.time.sleep")
+    def test_retries_empty_yahoo_result(self, mock_sleep) -> None:
+        expected = pd.Series([100.0], index=pd.to_datetime(["2026-08-24"]))
+        loader = unittest.mock.Mock(
+            side_effect=[DataUnavailableError("empty"), expected]
+        )
+
+        series, attempts = _load_with_retry(loader)
+
+        pd.testing.assert_series_equal(series, expected)
+        self.assertEqual(attempts, 2)
+        mock_sleep.assert_called_once()
+
+    @patch("data_loader.time.sleep")
+    def test_retries_server_error_but_not_client_error(self, mock_sleep) -> None:
+        server_response = requests.Response()
+        server_response.status_code = 503
+        server_error = requests.HTTPError("service unavailable", response=server_response)
+        expected = pd.Series([100.0], index=pd.to_datetime(["2026-08-24"]))
+        server_loader = unittest.mock.Mock(side_effect=[server_error, expected])
+
+        _, attempts = _load_with_retry(server_loader)
+
+        self.assertEqual(attempts, 2)
+
+        client_response = requests.Response()
+        client_response.status_code = 404
+        client_loader = unittest.mock.Mock(
+            side_effect=requests.HTTPError("not found", response=client_response)
+        )
+        with self.assertRaises(RetryFailure):
+            _load_with_retry(client_loader)
+
+        self.assertEqual(client_loader.call_count, 1)
+        mock_sleep.assert_called_once()
 
 
 if __name__ == "__main__":

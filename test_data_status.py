@@ -15,6 +15,8 @@ class DataStatusTest(unittest.TestCase):
                 "ticker": "PRIMARY",
                 "fetched_at": pd.Timestamp("2026-08-24 21:30", tz="Asia/Tokyo"),
                 "is_fallback": False,
+                "fetch_attempts": 2,
+                "fetch_duration_seconds": 1.234,
             }
         )
         fallback = pd.Series([50.0, 51.0], index=dates)
@@ -46,6 +48,8 @@ class DataStatusTest(unittest.TestCase):
         self.assertEqual(frame.iloc[0]["更新頻度"], "営業日次")
         self.assertEqual(frame.iloc[0]["鮮度"], "正常")
         self.assertEqual(frame.iloc[0]["遅延幅"], "1営業日")
+        self.assertEqual(frame.iloc[0]["取得試行"], "2回（再試行）")
+        self.assertEqual(frame.iloc[0]["取得時間"], "1.23秒")
 
     def test_handles_series_without_fetch_timestamp(self) -> None:
         series = pd.Series(
