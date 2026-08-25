@@ -16,6 +16,12 @@ from economic_calendar import (
     calendar_display_frame,
     latest_event_results,
 )
+from event_analysis import (
+    EVENT_ASSET_DEFINITIONS,
+    EVENT_HISTORY,
+    EVENT_SOURCE_URLS,
+    analyze_event_reactions,
+)
 from indicators import DATA_SOURCE_LABELS, INDICATORS
 from macro_regime import (
     assess_us_macro_regime,
@@ -597,6 +603,98 @@ with event_tab:
         )
     except Exception as error:
         st.warning(f"経済イベントカレンダーを表示できませんでした: {error}")
+
+    st.subheader("イベント前後分析（参考）")
+    st.caption(
+        "重要イベントの公表直前の終値を基準に、当日から20営業日後までの市場反応を集計します。"
+    )
+    selected_event_name = st.selectbox(
+        "分析するイベント", list(EVENT_HISTORY), key="event_analysis_name"
+    )
+    st.caption(
+        f"公式実績日: 2024〜2025年｜収録数: {len(EVENT_HISTORY[selected_event_name])}件"
+    )
+    if st.button(
+        "イベント反応を分析",
+        key="run_event_reaction_analysis",
+        use_container_width=True,
+    ):
+        st.session_state["show_event_reaction_analysis"] = True
+        st.session_state["analyzed_event_name"] = selected_event_name
+
+    if st.session_state.get("show_event_reaction_analysis", False):
+        active_event_name = st.session_state.get(
+            "analyzed_event_name", selected_event_name
+        )
+        if active_event_name != selected_event_name:
+            st.info("イベントを変更したため、「イベント反応を分析」を押して更新してください。")
+        else:
+            event_asset_series: dict[str, pd.Series] = {}
+            event_asset_methods: dict[str, str] = {}
+            event_asset_errors: list[str] = []
+            event_data_start = pd.Timestamp(EVENT_HISTORY[active_event_name][0]) - pd.DateOffset(
+                days=40
+            )
+            with st.spinner(f"{active_event_name}前後の市場反応を集計しています…"):
+                for display_name, (
+                    indicator_name,
+                    method,
+                ) in EVENT_ASSET_DEFINITIONS.items():
+                    try:
+                        event_asset_series[display_name] = load_indicator_data(
+                            INDICATORS[indicator_name], str(event_data_start.date())
+                        )
+                        event_asset_methods[display_name] = method
+                    except Exception as event_asset_error:
+                        event_asset_errors.append(f"{display_name}: {event_asset_error}")
+
+            for event_asset_error in event_asset_errors:
+                st.warning(f"イベント前後分析では {event_asset_error}")
+
+            if event_asset_series:
+                event_reactions = analyze_event_reactions(
+                    event_dates=EVENT_HISTORY[active_event_name],
+                    asset_series=event_asset_series,
+                    methods_by_asset=event_asset_methods,
+                )
+                for event_horizon in ["当日", "翌営業日", "5営業日後", "20営業日後"]:
+                    with st.expander(event_horizon, expanded=event_horizon in {"当日", "5営業日後"}):
+                        event_horizon_table = event_reactions[
+                            event_reactions["期間"] == event_horizon
+                        ].copy()
+                        for event_value_column in ["平均", "中央値"]:
+                            event_horizon_table[event_value_column] = event_horizon_table.apply(
+                                lambda row: (
+                                    "—"
+                                    if pd.isna(row[event_value_column])
+                                    else f"{row[event_value_column]:+.2f}{row['単位']}"
+                                ),
+                                axis=1,
+                            )
+                        event_horizon_table["上昇確率"] = event_horizon_table[
+                            "上昇確率"
+                        ].map(lambda value: "—" if pd.isna(value) else f"{value:.1f}%")
+                        st.dataframe(
+                            event_horizon_table.drop(columns=["期間", "単位"]),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+                if (event_reactions["注意"] == "サンプル少").any():
+                    st.warning(
+                        "サンプル数が12未満の組合せがあります。平均値だけで判断しないでください。"
+                    )
+                st.caption(
+                    "当日は公表日の最初の市場観測値、翌営業日以降はそこから指定観測数後を使い、"
+                    "公表日前の最終観測値と比較します。米10年金利は変化幅（bp）で、上昇確率は"
+                    "金利が上昇した割合です。日次終値による集計であり、発表直後の値動きではありません。"
+                )
+                st.caption(
+                    "過去の傾向であり、将来予測や投資助言ではありません。"
+                    "サプライズ方向別に拡張できる設計ですが、予想値がないため現在は全イベントを集計します。"
+                )
+                st.markdown(
+                    f"日程元: [{active_event_name}]({EVENT_SOURCE_URLS[active_event_name]})"
+                )
 
 with analysis_tab:
     st.subheader("相関変化検知（参考）")
