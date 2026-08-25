@@ -32,6 +32,9 @@ from regime_returns import (
 )
 from correlation_analysis import (
     build_correlation_frame,
+    build_daily_change_frame,
+    correlation_change_alerts,
+    correlation_change_summary,
     correlation_pairs,
     linear_regression_summary,
     rolling_correlation,
@@ -561,6 +564,127 @@ try:
     )
 except Exception as error:
     st.warning(f"経済イベントカレンダーを表示できませんでした: {error}")
+
+st.subheader("相関変化検知（参考）")
+st.caption(
+    "代表的な市場間関係について、現在の20日・60日相関を過去時点と5年間の分布に照らします。"
+    "価格は日次騰落率、金利・金利差は日次変化幅を使用します。"
+)
+correlation_change_pairs = {
+    "SOX × 米10年金利": ("SOX指数", "UST 10Y"),
+    "NASDAQ × 米10年金利": ("NASDAQ総合指数", "UST 10Y"),
+    "USD/JPY × 日米10年金利差": ("USD/JPY", "日米金利差 10Y（米国−日本）"),
+    "日経平均 × USD/JPY": ("日経平均株価", "USD/JPY"),
+}
+change_pair_label = st.selectbox(
+    "変化を確認する組合せ",
+    list(correlation_change_pairs),
+    key="correlation_change_pair",
+)
+change_left_name, change_right_name = correlation_change_pairs[change_pair_label]
+change_history_start = (
+    pd.Timestamp.today().normalize() - pd.DateOffset(years=5) - pd.DateOffset(days=120)
+).date()
+try:
+    with st.spinner("相関変化を確認しています…"):
+        change_series = {
+            name: load_indicator_data(INDICATORS[name], str(change_history_start))
+            for name in (change_left_name, change_right_name)
+        }
+    change_methods = {
+        name: (
+            "change"
+            if INDICATORS[name]["category"] == "金利"
+            or INDICATORS[name]["source"] == "us_jp_yield_spread"
+            else "return"
+        )
+        for name in change_series
+    }
+    daily_change_frame, daily_change_labels = build_daily_change_frame(
+        change_series, change_methods
+    )
+    five_year_start = pd.Timestamp.today().normalize() - pd.DateOffset(years=5)
+    daily_change_frame = daily_change_frame.loc[daily_change_frame.index >= five_year_start]
+    change_summary = correlation_change_summary(
+        daily_change_frame[change_left_name], daily_change_frame[change_right_name]
+    )
+
+    if change_summary.empty:
+        st.info("相関変化を計算するための共通データが十分にありません。")
+    else:
+        alerts = correlation_change_alerts(change_summary)
+        if alerts:
+            for alert in alerts:
+                st.warning(f"相関変化シグナル: {alert}")
+        else:
+            st.info("現在、設定した基準に該当する大きな相関変化はありません。")
+
+        change_display = change_summary.copy()
+        change_display["現在"] = change_display["現在"].map(lambda value: f"{value:+.2f}")
+        for offset, label in ((21, "1か月前"), (63, "3か月前")):
+            change_display[label] = change_display[f"{offset}日前"].map(
+                lambda value: "—" if pd.isna(value) else f"{value:+.2f}"
+            )
+            change_display[f"{label}比"] = change_display[f"{offset}日差"].map(
+                lambda value: "—" if pd.isna(value) else f"{value:+.2f}"
+            )
+        change_display["過去5年percentile"] = change_display["percentile"].map(
+            lambda value: f"{value:.0f}%"
+        )
+        st.dataframe(
+            change_display[
+                [
+                    "期間",
+                    "現在",
+                    "1か月前",
+                    "1か月前比",
+                    "3か月前",
+                    "3か月前比",
+                    "過去5年percentile",
+                    "共通観測数",
+                ]
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        change_figure = go.Figure()
+        for window, color in ((20, "#1f77b4"), (60, "#ff7f0e")):
+            values = rolling_correlation(
+                daily_change_frame[change_left_name],
+                daily_change_frame[change_right_name],
+                window,
+            )
+            if not values.empty:
+                change_figure.add_trace(
+                    go.Scatter(
+                        x=values.index,
+                        y=values,
+                        mode="lines",
+                        name=f"{window}日相関",
+                        line=dict(color=color, width=2),
+                        hovertemplate="日付: %{x|%Y-%m-%d}<br>相関係数: %{y:.2f}<extra></extra>",
+                    )
+                )
+        change_figure.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray")
+        change_figure.update_layout(
+            height=340,
+            margin=dict(l=20, r=20, t=20, b=40),
+            yaxis=dict(title="相関係数", range=[-1.05, 1.05]),
+            xaxis_title="日付",
+        )
+        st.plotly_chart(change_figure, use_container_width=True)
+        st.caption(
+            f"{change_left_name}（{daily_change_labels[change_left_name]}）× "
+            f"{change_right_name}（{daily_change_labels[change_right_name]}）｜"
+            "急変は1か月前比±0.25以上、分布シグナルは過去5年の上位・下位10%を目安に表示。"
+        )
+except Exception as error:
+    st.warning(f"相関変化検知を表示できませんでした: {error}")
+
+st.caption(
+    "相関の変化は市場構造の変化を探す判断材料です。因果関係や将来の値動きを示すものではありません。"
+)
 
 st.subheader("相関分析（参考）")
 st.caption(
