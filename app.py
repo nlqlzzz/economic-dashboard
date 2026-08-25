@@ -55,9 +55,33 @@ st.markdown(
     """
     <style>
     @media (max-width: 768px) {
+        .block-container {
+            padding-left: 0.75rem;
+            padding-right: 0.75rem;
+            padding-top: 1rem;
+        }
         [data-testid="stAppViewContainer"] h1 {
-            font-size: 2rem;
+            font-size: 1.7rem;
             line-height: 1.25;
+        }
+        [data-testid="stAppViewContainer"] h2 {
+            font-size: 1.35rem;
+        }
+        [data-testid="stMetric"] {
+            min-width: 0;
+        }
+        [data-testid="stMetricValue"] {
+            font-size: 1.25rem;
+        }
+        [data-baseweb="tab-list"] {
+            gap: 0.25rem;
+            overflow-x: auto;
+            scrollbar-width: thin;
+        }
+        [data-baseweb="tab"] {
+            flex: 0 0 auto;
+            padding-left: 0.65rem;
+            padding-right: 0.65rem;
         }
     }
     </style>
@@ -288,1063 +312,1068 @@ if not series_to_plot:
     st.error("データを表示できませんでした。ネットワーク接続とティッカーを確認してください。")
     st.stop()
 
-graph_display_mode = st.radio(
-    "グラフ表示",
-    ["重ねて表示", "左右の軸", "個別グラフ"],
-    horizontal=True,
-    key="graph_display_mode",
+market_tab, event_tab, analysis_tab, theme_tab = st.tabs(
+    ["市場概況", "イベント", "分析", "投資テーマ"]
 )
-right_axis_names: list[str] = []
-if graph_display_mode == "左右の軸":
-    right_axis_names = st.multiselect(
-        "右軸に表示する指標",
-        options=list(series_to_plot),
-        default=list(series_to_plot)[-1:] if len(series_to_plot) > 1 else [],
-        help="選ばなかった指標は左軸に表示します。",
+
+with market_tab:
+    graph_display_mode = st.radio(
+        "グラフ表示",
+        ["重ねて表示", "左右の軸", "個別グラフ"],
+        horizontal=True,
+        key="graph_display_mode",
     )
-
-
-def chart_label(name: str) -> str:
-    info = INDICATORS[name]
-    unit = series_to_plot[name].attrs.get("unit", info["unit"])
-    label = f"{name}（前年比 %）" if info.get("yoy") else f"{name}（{unit}）"
-    if normalize_values:
-        label = f"{name}（開始日=100）"
-    return label
-
-
-def chart_axis_title(name: str) -> str:
-    if normalize_values:
-        return "100基準"
-    info = INDICATORS[name]
-    return (
-        "前年比 %"
-        if info.get("yoy")
-        else series_to_plot[name].attrs.get("unit", info["unit"])
-    )
-
-
-if graph_display_mode == "個別グラフ":
-    for name, series in series_to_plot.items():
-        individual_figure = go.Figure(
-            go.Scatter(
-                x=series.index,
-                y=series,
-                mode="lines",
-                name=chart_label(name),
-            )
-        )
-        individual_figure.update_layout(
-            height=300,
-            title=dict(text=chart_label(name), font=dict(size=16)),
-            hovermode="x unified",
-            showlegend=False,
-            margin=dict(l=20, r=20, t=45, b=35),
-        )
-        individual_figure.update_yaxes(title=chart_axis_title(name))
-        st.plotly_chart(individual_figure, use_container_width=True)
-else:
+    right_axis_names: list[str] = []
     if graph_display_mode == "左右の軸":
-        figure = make_subplots(specs=[[{"secondary_y": True}]])
-    else:
-        figure = go.Figure()
+        right_axis_names = st.multiselect(
+            "右軸に表示する指標",
+            options=list(series_to_plot),
+            default=list(series_to_plot)[-1:] if len(series_to_plot) > 1 else [],
+            help="選ばなかった指標は左軸に表示します。",
+        )
 
-    for name, series in series_to_plot.items():
-        trace = go.Scatter(x=series.index, y=series, mode="lines", name=chart_label(name))
+
+    def chart_label(name: str) -> str:
+        info = INDICATORS[name]
+        unit = series_to_plot[name].attrs.get("unit", info["unit"])
+        label = f"{name}（前年比 %）" if info.get("yoy") else f"{name}（{unit}）"
+        if normalize_values:
+            label = f"{name}（開始日=100）"
+        return label
+
+
+    def chart_axis_title(name: str) -> str:
+        if normalize_values:
+            return "100基準"
+        info = INDICATORS[name]
+        return (
+            "前年比 %"
+            if info.get("yoy")
+            else series_to_plot[name].attrs.get("unit", info["unit"])
+        )
+
+
+    if graph_display_mode == "個別グラフ":
+        for name, series in series_to_plot.items():
+            individual_figure = go.Figure(
+                go.Scatter(
+                    x=series.index,
+                    y=series,
+                    mode="lines",
+                    name=chart_label(name),
+                )
+            )
+            individual_figure.update_layout(
+                height=300,
+                title=dict(text=chart_label(name), font=dict(size=16)),
+                hovermode="x unified",
+                showlegend=False,
+                margin=dict(l=20, r=20, t=45, b=35),
+            )
+            individual_figure.update_yaxes(title=chart_axis_title(name))
+            st.plotly_chart(individual_figure, use_container_width=True)
+    else:
         if graph_display_mode == "左右の軸":
-            figure.add_trace(trace, secondary_y=name in right_axis_names)
+            figure = make_subplots(specs=[[{"secondary_y": True}]])
         else:
-            figure.add_trace(trace)
+            figure = go.Figure()
 
-    figure.update_layout(
-        height=420,
-        hovermode="x unified",
-        legend=dict(
-            orientation="h",
-            yanchor="top",
-            y=-0.2,
-            xanchor="left",
-            x=0,
-        ),
-        margin=dict(l=20, r=20, t=30, b=90),
-    )
-    if graph_display_mode == "左右の軸":
-        figure.update_yaxes(
-            title="左軸（100基準）" if normalize_values else "左軸",
-            secondary_y=False,
+        for name, series in series_to_plot.items():
+            trace = go.Scatter(x=series.index, y=series, mode="lines", name=chart_label(name))
+            if graph_display_mode == "左右の軸":
+                figure.add_trace(trace, secondary_y=name in right_axis_names)
+            else:
+                figure.add_trace(trace)
+
+        figure.update_layout(
+            height=420,
+            hovermode="x unified",
+            legend=dict(
+                orientation="h",
+                yanchor="top",
+                y=-0.2,
+                xanchor="left",
+                x=0,
+            ),
+            margin=dict(l=20, r=20, t=30, b=90),
         )
-        figure.update_yaxes(
-            title="右軸（100基準）" if normalize_values else "右軸",
-            secondary_y=True,
-        )
-    else:
-        figure.update_yaxes(title="100基準" if normalize_values else "値")
-    st.plotly_chart(figure, use_container_width=True)
-st.checkbox("100を基準に比較する", value=True, key="normalize_values_v2")
-
-latest_values_note = (
-    '<span style="font-size: 0.9rem; font-weight: 400; color: #888;">（開始日=100）</span>'
-    if normalize_values
-    else ""
-)
-st.markdown(f"### 最新値　{latest_values_note}", unsafe_allow_html=True)
-st.caption("★ 主要は、景気・為替・日米株・市場心理・長期金利の代表指標です。")
-change_rows: list[dict[str, str]] = []
-card_items = list(series_to_plot.items())
-for card_index, (name, series) in enumerate(card_items):
-    if card_index % 4 == 0:
-        cards = st.columns(4)
-    column = cards[card_index % 4]
-    card = column.container(border=True)
-    observed_at, value = latest_value(series)
-    info = INDICATORS[name]
-    suffix = (
-        "（前年比 %）"
-        if info.get("yoy")
-        else series.attrs.get("unit", info["unit"])
-    )
-    display_value = f"{value:,.2f}" if normalize_values else f"{value:,.2f} {suffix}"
-    previous_change = change_from_previous(series)
-    if previous_change is None:
-        delta = None
-        previous_rate = None
-    else:
-        change, previous_rate = previous_change
-        delta = f"{change:+,.2f}（{previous_rate:+.2f}%）"
-    if previous_rate is None:
-        movement_label = "－ 変化データなし"
-    elif previous_rate > 0.05:
-        movement_label = "↗ 上昇"
-    elif previous_rate < -0.05:
-        movement_label = "↘ 下落"
-    else:
-        movement_label = "→ 横ばい"
-    importance_label = "★ 主要" if name in KEY_MARKET_INDICATORS else "通常"
-    actual_source = series.attrs.get("source", info["source"])
-    source_label = DATA_SOURCE_LABELS.get(actual_source, actual_source)
-    if series.attrs.get("is_fallback"):
-        source_label = f"{source_label}・{series.attrs['ticker']}（代替）"
-    card.caption(f"{importance_label}｜{movement_label}")
-    card.metric(name, display_value, delta=delta, help=f"観測日: {observed_at:%Y-%m-%d}")
-    card.caption(f"データ日: {observed_at:%Y-%m-%d}｜データ元: {source_label}")
-
-    def format_rate(rate: float | None) -> str:
-        return "—" if rate is None else f"{rate:+.2f}%"
-
-    change_rows.append(
-        {
-            "指標": name,
-            "直前値比": format_rate(previous_rate),
-            "1週間": format_rate(percent_change_since(series, observed_at - pd.Timedelta(days=7))),
-            "1か月": format_rate(percent_change_since(series, observed_at - pd.DateOffset(months=1))),
-            "年初来": format_rate(percent_change_since(series, pd.Timestamp(year=observed_at.year, month=1, day=1))),
-            "表示期間": format_rate(percent_change_since(series, pd.Timestamp(start_date))),
-        }
-    )
-
-market_summary = build_market_summary(series_to_plot, INDICATORS)
-st.subheader("今日のマーケット")
-st.info(f"**{market_summary['headline']}**")
-if market_summary["bullets"]:
-    for summary_line in market_summary["bullets"]:
-        st.markdown(f"- {summary_line}")
-else:
-    st.caption("要約できる直前観測値がありません。")
-summary_latest_date = market_summary["latest_date"]
-if summary_latest_date is not None:
-    st.caption(
-        f"選択中の指標の直前観測値比によるルールベース要約です。最新データ日: "
-        f"{summary_latest_date:%Y-%m-%d}。ニュースや将来予測は含みません。"
-    )
-
-st.subheader("騰落率")
-st.caption("直前値比は直前の観測値、その他は指定時点以前で最も新しい観測値を基準に計算します。")
-st.dataframe(pd.DataFrame(change_rows), hide_index=True, use_container_width=True)
-
-st.subheader("急変検知")
-with st.expander("検知する騰落率を設定"):
-    alert_threshold_columns = st.columns(3)
-    alert_thresholds = {
-        "直前観測値比": alert_threshold_columns[0].number_input(
-            "直前観測値比（%）",
-            min_value=0.1,
-            value=2.0,
-            step=0.5,
-            key="alert_previous_threshold",
-        ),
-        "1週間": alert_threshold_columns[1].number_input(
-            "1週間（%）",
-            min_value=0.1,
-            value=5.0,
-            step=0.5,
-            key="alert_week_threshold",
-        ),
-        "1か月": alert_threshold_columns[2].number_input(
-            "1か月（%）",
-            min_value=0.1,
-            value=10.0,
-            step=0.5,
-            key="alert_month_threshold",
-        ),
-    }
-
-market_move_alerts = detect_market_moves(series_to_plot, alert_thresholds)
-if market_move_alerts.empty:
-    st.success("設定した閾値を超える動きはありません。")
-else:
-    st.warning(f"設定した閾値を超えた動きが{len(market_move_alerts)}件あります。")
-    alert_display = market_move_alerts.copy()
-    alert_display["方向"] = alert_display["方向"].map(
-        {"上昇": "🔴 上昇", "下落": "🔵 下落", "横ばい": "横ばい"}
-    )
-    alert_display["騰落率"] = alert_display["騰落率"].map(lambda rate: f"{rate:+.2f}%")
-    alert_display["閾値"] = alert_display["閾値"].map(lambda value: f"±{value:.1f}%")
-    alert_display["データ日"] = alert_display["データ日"].dt.strftime("%Y-%m-%d")
-    st.dataframe(
-        alert_display.drop(columns="重要度"),
-        hide_index=True,
-        use_container_width=True,
-    )
-st.caption(
-    "画面内の注意表示です。直前観測値比は指標ごとの直前データと比較します。"
-    "外部通知や売買判断を行うものではありません。"
-)
-
-with st.expander("データ更新状況"):
-    st.dataframe(
-        build_data_status_frame(series_to_plot, INDICATORS, DATA_SOURCE_LABELS),
-        hide_index=True,
-        use_container_width=True,
-    )
-    st.caption(
-        "データ最終日は系列の最新観測日、取得確認日時はキャッシュ内データを取得した日本時間です。"
-    )
-
-with st.expander("データ一覧"):
-    table = pd.concat(series_to_plot, axis=1)
-    st.dataframe(table.sort_index(ascending=False), use_container_width=True)
-
-st.divider()
-st.header("参考情報")
-
-st.subheader("米国経済イベントカレンダー（参考）")
-calendar_months = st.radio(
-    "表示期間",
-    ["今後3か月", "今後6か月", "収録分すべて"],
-    horizontal=True,
-    key="economic_calendar_period",
-)
-calendar_end_offsets = {
-    "今後3か月": pd.DateOffset(months=3),
-    "今後6か月": pd.DateOffset(months=6),
-    "収録分すべて": pd.DateOffset(years=2),
-}
-try:
-    calendar_today = pd.Timestamp.now(tz="Asia/Tokyo").normalize()
-    calendar_data_start = (calendar_today - pd.DateOffset(months=18)).date()
-    with st.spinner("経済イベントと直近結果を確認しています…"):
-        economic_events = build_us_economic_events()
-        event_results = latest_event_results(
-            cpi=load_data("fred", "CPIAUCSL", str(calendar_data_start)),
-            unemployment=load_data("fred", "UNRATE", str(calendar_data_start)),
-            payrolls=load_data("fred", "PAYEMS", str(calendar_data_start)),
-            fed_funds=load_data("fred", "DFEDTARU", str(calendar_data_start)),
-        )
-        calendar_table = calendar_display_frame(
-            economic_events,
-            event_results,
-            start=calendar_today,
-            end=calendar_today + calendar_end_offsets[calendar_months],
-        )
-    if calendar_table.empty:
-        st.info("選択期間に収録済みのイベントはありません。")
-    else:
-        st.dataframe(calendar_table, hide_index=True, use_container_width=True)
-    st.caption(
-        "日程はBLS（2026年12月まで）とFRB（2027年12月まで）の公表情報を日本時間へ変換。"
-        "予想値は公式データにないため表示しません。直近結果・前回値はFREDの最新系列値です。"
-    )
-    st.markdown(
-        f"日程元: [BLS]({OFFICIAL_SCHEDULE_URLS['BLS']}) / "
-        f"[FRB]({OFFICIAL_SCHEDULE_URLS['FRB']})"
-    )
-except Exception as error:
-    st.warning(f"経済イベントカレンダーを表示できませんでした: {error}")
-
-st.subheader("相関変化検知（参考）")
-st.caption(
-    "代表的な市場間関係について、現在の20日・60日相関を過去時点と5年間の分布に照らします。"
-    "価格は日次騰落率、金利・金利差は日次変化幅を使用します。"
-)
-correlation_change_pairs = {
-    "SOX × 米10年金利": ("SOX指数", "UST 10Y"),
-    "NASDAQ × 米10年金利": ("NASDAQ総合指数", "UST 10Y"),
-    "USD/JPY × 日米10年金利差": ("USD/JPY", "日米金利差 10Y（米国−日本）"),
-    "日経平均 × USD/JPY": ("日経平均株価", "USD/JPY"),
-}
-change_pair_label = st.selectbox(
-    "変化を確認する組合せ",
-    list(correlation_change_pairs),
-    key="correlation_change_pair",
-)
-change_left_name, change_right_name = correlation_change_pairs[change_pair_label]
-change_history_start = (
-    pd.Timestamp.today().normalize() - pd.DateOffset(years=5) - pd.DateOffset(days=120)
-).date()
-try:
-    with st.spinner("相関変化を確認しています…"):
-        change_series = {
-            name: load_indicator_data(INDICATORS[name], str(change_history_start))
-            for name in (change_left_name, change_right_name)
-        }
-    change_methods = {
-        name: (
-            "change"
-            if INDICATORS[name]["category"] == "金利"
-            or INDICATORS[name]["source"] == "us_jp_yield_spread"
-            else "return"
-        )
-        for name in change_series
-    }
-    daily_change_frame, daily_change_labels = build_daily_change_frame(
-        change_series, change_methods
-    )
-    five_year_start = pd.Timestamp.today().normalize() - pd.DateOffset(years=5)
-    daily_change_frame = daily_change_frame.loc[daily_change_frame.index >= five_year_start]
-    change_summary = correlation_change_summary(
-        daily_change_frame[change_left_name], daily_change_frame[change_right_name]
-    )
-
-    if change_summary.empty:
-        st.info("相関変化を計算するための共通データが十分にありません。")
-    else:
-        alerts = correlation_change_alerts(change_summary)
-        if alerts:
-            for alert in alerts:
-                st.warning(f"相関変化シグナル: {alert}")
+        if graph_display_mode == "左右の軸":
+            figure.update_yaxes(
+                title="左軸（100基準）" if normalize_values else "左軸",
+                secondary_y=False,
+            )
+            figure.update_yaxes(
+                title="右軸（100基準）" if normalize_values else "右軸",
+                secondary_y=True,
+            )
         else:
-            st.info("現在、設定した基準に該当する大きな相関変化はありません。")
+            figure.update_yaxes(title="100基準" if normalize_values else "値")
+        st.plotly_chart(figure, use_container_width=True)
+    st.checkbox("100を基準に比較する", value=True, key="normalize_values_v2")
 
-        change_display = change_summary.copy()
-        change_display["現在"] = change_display["現在"].map(lambda value: f"{value:+.2f}")
-        for offset, label in ((21, "1か月前"), (63, "3か月前")):
-            change_display[label] = change_display[f"{offset}日前"].map(
-                lambda value: "—" if pd.isna(value) else f"{value:+.2f}"
-            )
-            change_display[f"{label}比"] = change_display[f"{offset}日差"].map(
-                lambda value: "—" if pd.isna(value) else f"{value:+.2f}"
-            )
-        change_display["過去5年percentile"] = change_display["percentile"].map(
-            lambda value: f"{value:.0f}%"
+    latest_values_note = (
+        '<span style="font-size: 0.9rem; font-weight: 400; color: #888;">（開始日=100）</span>'
+        if normalize_values
+        else ""
+    )
+    st.markdown(f"### 最新値　{latest_values_note}", unsafe_allow_html=True)
+    st.caption("★ 主要は、景気・為替・日米株・市場心理・長期金利の代表指標です。")
+    change_rows: list[dict[str, str]] = []
+    card_items = list(series_to_plot.items())
+    for card_index, (name, series) in enumerate(card_items):
+        if card_index % 4 == 0:
+            cards = st.columns(4)
+        column = cards[card_index % 4]
+        card = column.container(border=True)
+        observed_at, value = latest_value(series)
+        info = INDICATORS[name]
+        suffix = (
+            "（前年比 %）"
+            if info.get("yoy")
+            else series.attrs.get("unit", info["unit"])
         )
+        display_value = f"{value:,.2f}" if normalize_values else f"{value:,.2f} {suffix}"
+        previous_change = change_from_previous(series)
+        if previous_change is None:
+            delta = None
+            previous_rate = None
+        else:
+            change, previous_rate = previous_change
+            delta = f"{change:+,.2f}（{previous_rate:+.2f}%）"
+        if previous_rate is None:
+            movement_label = "－ 変化データなし"
+        elif previous_rate > 0.05:
+            movement_label = "↗ 上昇"
+        elif previous_rate < -0.05:
+            movement_label = "↘ 下落"
+        else:
+            movement_label = "→ 横ばい"
+        importance_label = "★ 主要" if name in KEY_MARKET_INDICATORS else "通常"
+        actual_source = series.attrs.get("source", info["source"])
+        source_label = DATA_SOURCE_LABELS.get(actual_source, actual_source)
+        if series.attrs.get("is_fallback"):
+            source_label = f"{source_label}・{series.attrs['ticker']}（代替）"
+        card.caption(f"{importance_label}｜{movement_label}")
+        card.metric(name, display_value, delta=delta, help=f"観測日: {observed_at:%Y-%m-%d}")
+        card.caption(f"データ日: {observed_at:%Y-%m-%d}｜データ元: {source_label}")
+
+        def format_rate(rate: float | None) -> str:
+            return "—" if rate is None else f"{rate:+.2f}%"
+
+        change_rows.append(
+            {
+                "指標": name,
+                "直前値比": format_rate(previous_rate),
+                "1週間": format_rate(percent_change_since(series, observed_at - pd.Timedelta(days=7))),
+                "1か月": format_rate(percent_change_since(series, observed_at - pd.DateOffset(months=1))),
+                "年初来": format_rate(percent_change_since(series, pd.Timestamp(year=observed_at.year, month=1, day=1))),
+                "表示期間": format_rate(percent_change_since(series, pd.Timestamp(start_date))),
+            }
+        )
+
+    market_summary = build_market_summary(series_to_plot, INDICATORS)
+    st.subheader("今日のマーケット")
+    st.info(f"**{market_summary['headline']}**")
+    if market_summary["bullets"]:
+        for summary_line in market_summary["bullets"]:
+            st.markdown(f"- {summary_line}")
+    else:
+        st.caption("要約できる直前観測値がありません。")
+    summary_latest_date = market_summary["latest_date"]
+    if summary_latest_date is not None:
+        st.caption(
+            f"選択中の指標の直前観測値比によるルールベース要約です。最新データ日: "
+            f"{summary_latest_date:%Y-%m-%d}。ニュースや将来予測は含みません。"
+        )
+
+    st.subheader("騰落率")
+    st.caption("直前値比は直前の観測値、その他は指定時点以前で最も新しい観測値を基準に計算します。")
+    st.dataframe(pd.DataFrame(change_rows), hide_index=True, use_container_width=True)
+
+    st.subheader("急変検知")
+    with st.expander("検知する騰落率を設定"):
+        alert_threshold_columns = st.columns(3)
+        alert_thresholds = {
+            "直前観測値比": alert_threshold_columns[0].number_input(
+                "直前観測値比（%）",
+                min_value=0.1,
+                value=2.0,
+                step=0.5,
+                key="alert_previous_threshold",
+            ),
+            "1週間": alert_threshold_columns[1].number_input(
+                "1週間（%）",
+                min_value=0.1,
+                value=5.0,
+                step=0.5,
+                key="alert_week_threshold",
+            ),
+            "1か月": alert_threshold_columns[2].number_input(
+                "1か月（%）",
+                min_value=0.1,
+                value=10.0,
+                step=0.5,
+                key="alert_month_threshold",
+            ),
+        }
+
+    market_move_alerts = detect_market_moves(series_to_plot, alert_thresholds)
+    if market_move_alerts.empty:
+        st.success("設定した閾値を超える動きはありません。")
+    else:
+        st.warning(f"設定した閾値を超えた動きが{len(market_move_alerts)}件あります。")
+        alert_display = market_move_alerts.copy()
+        alert_display["方向"] = alert_display["方向"].map(
+            {"上昇": "🔴 上昇", "下落": "🔵 下落", "横ばい": "横ばい"}
+        )
+        alert_display["騰落率"] = alert_display["騰落率"].map(lambda rate: f"{rate:+.2f}%")
+        alert_display["閾値"] = alert_display["閾値"].map(lambda value: f"±{value:.1f}%")
+        alert_display["データ日"] = alert_display["データ日"].dt.strftime("%Y-%m-%d")
         st.dataframe(
-            change_display[
-                [
-                    "期間",
-                    "現在",
-                    "1か月前",
-                    "1か月前比",
-                    "3か月前",
-                    "3か月前比",
-                    "過去5年percentile",
-                    "共通観測数",
-                ]
-            ],
+            alert_display.drop(columns="重要度"),
             hide_index=True,
             use_container_width=True,
         )
+    st.caption(
+        "画面内の注意表示です。直前観測値比は指標ごとの直前データと比較します。"
+        "外部通知や売買判断を行うものではありません。"
+    )
 
-        change_figure = go.Figure()
-        for window, color in ((20, "#1f77b4"), (60, "#ff7f0e")):
-            values = rolling_correlation(
-                daily_change_frame[change_left_name],
-                daily_change_frame[change_right_name],
-                window,
-            )
-            if not values.empty:
-                change_figure.add_trace(
-                    go.Scatter(
-                        x=values.index,
-                        y=values,
-                        mode="lines",
-                        name=f"{window}日相関",
-                        line=dict(color=color, width=2),
-                        hovertemplate="日付: %{x|%Y-%m-%d}<br>相関係数: %{y:.2f}<extra></extra>",
-                    )
-                )
-        change_figure.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray")
-        change_figure.update_layout(
-            height=340,
-            margin=dict(l=20, r=20, t=20, b=40),
-            yaxis=dict(title="相関係数", range=[-1.05, 1.05]),
-            xaxis_title="日付",
-        )
-        st.plotly_chart(change_figure, use_container_width=True)
-        st.caption(
-            f"{change_left_name}（{daily_change_labels[change_left_name]}）× "
-            f"{change_right_name}（{daily_change_labels[change_right_name]}）｜"
-            "急変は1か月前比±0.25以上、分布シグナルは過去5年の上位・下位10%を目安に表示。"
-        )
-except Exception as error:
-    st.warning(f"相関変化検知を表示できませんでした: {error}")
-
-st.caption(
-    "相関の変化は市場構造の変化を探す判断材料です。因果関係や将来の値動きを示すものではありません。"
-)
-
-st.subheader("相関分析（参考）")
-st.caption(
-    "価格系は騰落率、金利・金利差・マクロ指標はポイント変化で比較します。"
-    "マクロ指標を含む場合は月次、それ以外は週次です。初期値は、上で選択している指標です。"
-)
-
-correlation_period_months = {
-    "3か月": 3,
-    "6か月": 6,
-    "1年": 12,
-    "3年": 36,
-}
-correlation_presets = {
-    "為替と日本株": ["USD/JPY", "日経平均株価"],
-    "米金利と半導体株": ["UST 10Y", "SOX指数"],
-    "米金利と米国株": ["UST 10Y", "S&P 500指数"],
-    "米物価と政策金利": ["CPI", "FF金利"],
-}
-if "correlation_names" not in st.session_state:
-    st.session_state["correlation_names"] = selected_names[:8]
-
-st.markdown("##### よく使う組合せ")
-st.caption("ボタンを押すと、下の相関分析対象へ2指標が設定されます。")
-preset_columns = st.columns(2)
-for preset_index, (preset_name, preset_indicators) in enumerate(correlation_presets.items()):
-    with preset_columns[preset_index % 2]:
-        if st.button(
-            preset_name,
-            key=f"correlation_preset_{preset_index}",
+    with st.expander("データ更新状況"):
+        st.dataframe(
+            build_data_status_frame(series_to_plot, INDICATORS, DATA_SOURCE_LABELS),
+            hide_index=True,
             use_container_width=True,
-            help=" × ".join(preset_indicators),
-        ):
-            st.session_state["correlation_names"] = preset_indicators
-
-analysis_left, analysis_right = st.columns([1, 2])
-with analysis_left:
-    correlation_period_label = st.selectbox(
-        "相関を調べる期間", list(correlation_period_months), index=2
-    )
-with analysis_right:
-    correlation_names = st.multiselect(
-        "相関分析の対象（最大8指標）",
-        options=list(INDICATORS),
-        max_selections=8,
-        key="correlation_names",
-        help="例：USD/JPYと日経平均株価、UST 10YとSOX指数を選択します。",
-    )
-
-if len(correlation_names) < 2:
-    st.info("相関分析の対象を2つ以上選択してください。")
-else:
-    correlation_start_date = (
-        pd.Timestamp.today().normalize()
-        - pd.DateOffset(months=correlation_period_months[correlation_period_label])
-        - pd.DateOffset(days=14)
-    ).date()
-    correlation_series: dict[str, pd.Series] = {}
-    correlation_methods: dict[str, str] = {}
-    correlation_errors: list[str] = []
-    with st.spinner("相関分析用のデータを取得しています…"):
-        for name in correlation_names:
-            info = INDICATORS[name]
-            try:
-                series = load_indicator_data(info, str(correlation_start_date))
-                correlation_series[name] = series
-                if info.get("correlation_method"):
-                    correlation_methods[name] = info["correlation_method"]
-                elif info["category"] == "金利":
-                    correlation_methods[name] = "weekly_change"
-                else:
-                    correlation_methods[name] = "weekly_return"
-            except Exception as error:
-                correlation_errors.append(f"{name}: {error}")
-
-    for error in correlation_errors:
-        st.warning(f"相関分析では {error}")
-
-    if len(correlation_series) < 2:
-        st.warning("相関を計算できる指標が2つ以上ありません。")
-    else:
-        correlation_frame, correlation_labels, frequency_label = build_correlation_frame(
-            correlation_series, correlation_methods
         )
-        minimum_observations = 3 if frequency_label == "月次" else 8
-        correlation_matrix = correlation_frame.corr(min_periods=minimum_observations)
-        pair_table = correlation_pairs(correlation_frame, minimum_observations)
+        st.caption(
+            "データ最終日は系列の最新観測日、取得確認日時はキャッシュ内データを取得した日本時間です。"
+        )
 
-        if pair_table.empty:
-            st.info(f"相関を計算するための共通する{frequency_label}データが十分にありません。")
+    with st.expander("データ一覧"):
+        table = pd.concat(series_to_plot, axis=1)
+        st.dataframe(table.sort_index(ascending=False), use_container_width=True)
+
+with event_tab:
+    st.subheader("米国経済イベントカレンダー（参考）")
+    calendar_months = st.radio(
+        "表示期間",
+        ["今後3か月", "今後6か月", "収録分すべて"],
+        horizontal=True,
+        key="economic_calendar_period",
+    )
+    calendar_end_offsets = {
+        "今後3か月": pd.DateOffset(months=3),
+        "今後6か月": pd.DateOffset(months=6),
+        "収録分すべて": pd.DateOffset(years=2),
+    }
+    try:
+        calendar_today = pd.Timestamp.now(tz="Asia/Tokyo").normalize()
+        calendar_data_start = (calendar_today - pd.DateOffset(months=18)).date()
+        with st.spinner("経済イベントと直近結果を確認しています…"):
+            economic_events = build_us_economic_events()
+            event_results = latest_event_results(
+                cpi=load_data("fred", "CPIAUCSL", str(calendar_data_start)),
+                unemployment=load_data("fred", "UNRATE", str(calendar_data_start)),
+                payrolls=load_data("fred", "PAYEMS", str(calendar_data_start)),
+                fed_funds=load_data("fred", "DFEDTARU", str(calendar_data_start)),
+            )
+            calendar_table = calendar_display_frame(
+                economic_events,
+                event_results,
+                start=calendar_today,
+                end=calendar_today + calendar_end_offsets[calendar_months],
+            )
+        if calendar_table.empty:
+            st.info("選択期間に収録済みのイベントはありません。")
         else:
-            pair_table["相関係数"] = pair_table["相関係数"].map(lambda value: f"{value:+.2f}")
-            st.markdown("##### 相関係数一覧")
-            st.dataframe(pair_table, hide_index=True, use_container_width=True)
+            st.dataframe(calendar_table, hide_index=True, use_container_width=True)
+        st.caption(
+            "日程はBLS（2026年12月まで）とFRB（2027年12月まで）の公表情報を日本時間へ変換。"
+            "予想値は公式データにないため表示しません。直近結果・前回値はFREDの最新系列値です。"
+        )
+        st.markdown(
+            f"日程元: [BLS]({OFFICIAL_SCHEDULE_URLS['BLS']}) / "
+            f"[FRB]({OFFICIAL_SCHEDULE_URLS['FRB']})"
+        )
+    except Exception as error:
+        st.warning(f"経済イベントカレンダーを表示できませんでした: {error}")
 
-            st.markdown("##### 相関マトリクス")
-            heatmap = go.Figure(
-                data=go.Heatmap(
-                    z=correlation_matrix.values,
-                    x=correlation_matrix.columns,
-                    y=correlation_matrix.index,
-                    zmin=-1,
-                    zmax=1,
-                    zmid=0,
-                    colorscale="RdBu",
-                    colorbar=dict(title="相関"),
-                    hovertemplate="%{y} × %{x}<br>相関係数: %{z:.2f}<extra></extra>",
-                )
+with analysis_tab:
+    st.subheader("相関変化検知（参考）")
+    st.caption(
+        "代表的な市場間関係について、現在の20日・60日相関を過去時点と5年間の分布に照らします。"
+        "価格は日次騰落率、金利・金利差は日次変化幅を使用します。"
+    )
+    correlation_change_pairs = {
+        "SOX × 米10年金利": ("SOX指数", "UST 10Y"),
+        "NASDAQ × 米10年金利": ("NASDAQ総合指数", "UST 10Y"),
+        "USD/JPY × 日米10年金利差": ("USD/JPY", "日米金利差 10Y（米国−日本）"),
+        "日経平均 × USD/JPY": ("日経平均株価", "USD/JPY"),
+    }
+    change_pair_label = st.selectbox(
+        "変化を確認する組合せ",
+        list(correlation_change_pairs),
+        key="correlation_change_pair",
+    )
+    change_left_name, change_right_name = correlation_change_pairs[change_pair_label]
+    change_history_start = (
+        pd.Timestamp.today().normalize() - pd.DateOffset(years=5) - pd.DateOffset(days=120)
+    ).date()
+    try:
+        with st.spinner("相関変化を確認しています…"):
+            change_series = {
+                name: load_indicator_data(INDICATORS[name], str(change_history_start))
+                for name in (change_left_name, change_right_name)
+            }
+        change_methods = {
+            name: (
+                "change"
+                if INDICATORS[name]["category"] == "金利"
+                or INDICATORS[name]["source"] == "us_jp_yield_spread"
+                else "return"
             )
-            heatmap.update_layout(height=450, margin=dict(l=20, r=20, t=20, b=100))
-            st.plotly_chart(heatmap, use_container_width=True)
+            for name in change_series
+        }
+        daily_change_frame, daily_change_labels = build_daily_change_frame(
+            change_series, change_methods
+        )
+        five_year_start = pd.Timestamp.today().normalize() - pd.DateOffset(years=5)
+        daily_change_frame = daily_change_frame.loc[daily_change_frame.index >= five_year_start]
+        change_summary = correlation_change_summary(
+            daily_change_frame[change_left_name], daily_change_frame[change_right_name]
+        )
 
-            st.markdown("##### 2指標の散布図")
-            scatter_left, scatter_right = st.columns(2)
-            with scatter_left:
-                scatter_x_name = st.selectbox("横軸", list(correlation_series), key="correlation_x")
-            with scatter_right:
-                scatter_y_options = [name for name in correlation_series if name != scatter_x_name]
-                scatter_y_name = st.selectbox("縦軸", scatter_y_options, key="correlation_y")
-            scatter_data = correlation_frame[[scatter_x_name, scatter_y_name]].dropna()
-            scatter_figure = go.Figure(
-                go.Scatter(
-                    x=scatter_data[scatter_x_name],
-                    y=scatter_data[scatter_y_name],
-                    mode="markers",
-                    name="データ",
-                    marker=dict(size=8, opacity=0.7),
-                    text=[observed.strftime("%Y-%m-%d") for observed in scatter_data.index],
-                    hovertemplate=(
-                        f"{frequency_label}: %{{text}}<br>"
-                        "横軸: %{x:.2f}<br>縦軸: %{y:.2f}<extra></extra>"
-                    ),
+        if change_summary.empty:
+            st.info("相関変化を計算するための共通データが十分にありません。")
+        else:
+            alerts = correlation_change_alerts(change_summary)
+            if alerts:
+                for alert in alerts:
+                    st.warning(f"相関変化シグナル: {alert}")
+            else:
+                st.info("現在、設定した基準に該当する大きな相関変化はありません。")
+
+            change_display = change_summary.copy()
+            change_display["現在"] = change_display["現在"].map(lambda value: f"{value:+.2f}")
+            for offset, label in ((21, "1か月前"), (63, "3か月前")):
+                change_display[label] = change_display[f"{offset}日前"].map(
+                    lambda value: "—" if pd.isna(value) else f"{value:+.2f}"
                 )
+                change_display[f"{label}比"] = change_display[f"{offset}日差"].map(
+                    lambda value: "—" if pd.isna(value) else f"{value:+.2f}"
+                )
+            change_display["過去5年percentile"] = change_display["percentile"].map(
+                lambda value: f"{value:.0f}%"
             )
-            regression = linear_regression_summary(
-                scatter_data[scatter_x_name], scatter_data[scatter_y_name]
+            st.dataframe(
+                change_display[
+                    [
+                        "期間",
+                        "現在",
+                        "1か月前",
+                        "1か月前比",
+                        "3か月前",
+                        "3か月前比",
+                        "過去5年percentile",
+                        "共通観測数",
+                    ]
+                ],
+                hide_index=True,
+                use_container_width=True,
             )
-            if regression is not None:
-                slope, intercept, scatter_correlation = regression
-                line_x = [
-                    float(scatter_data[scatter_x_name].min()),
-                    float(scatter_data[scatter_x_name].max()),
-                ]
-                line_y = [slope * value + intercept for value in line_x]
-                scatter_figure.add_trace(
-                    go.Scatter(
-                        x=line_x,
-                        y=line_y,
-                        mode="lines",
-                        name="回帰線",
-                        line=dict(color="#ff7f0e", width=2),
-                        hoverinfo="skip",
+
+            change_figure = go.Figure()
+            for window, color in ((20, "#1f77b4"), (60, "#ff7f0e")):
+                values = rolling_correlation(
+                    daily_change_frame[change_left_name],
+                    daily_change_frame[change_right_name],
+                    window,
+                )
+                if not values.empty:
+                    change_figure.add_trace(
+                        go.Scatter(
+                            x=values.index,
+                            y=values,
+                            mode="lines",
+                            name=f"{window}日相関",
+                            line=dict(color=color, width=2),
+                            hovertemplate="日付: %{x|%Y-%m-%d}<br>相関係数: %{y:.2f}<extra></extra>",
+                        )
+                    )
+            change_figure.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray")
+            change_figure.update_layout(
+                height=340,
+                margin=dict(l=20, r=20, t=20, b=40),
+                yaxis=dict(title="相関係数", range=[-1.05, 1.05]),
+                xaxis_title="日付",
+            )
+            st.plotly_chart(change_figure, use_container_width=True)
+            st.caption(
+                f"{change_left_name}（{daily_change_labels[change_left_name]}）× "
+                f"{change_right_name}（{daily_change_labels[change_right_name]}）｜"
+                "急変は1か月前比±0.25以上、分布シグナルは過去5年の上位・下位10%を目安に表示。"
+            )
+    except Exception as error:
+        st.warning(f"相関変化検知を表示できませんでした: {error}")
+
+    st.caption(
+        "相関の変化は市場構造の変化を探す判断材料です。因果関係や将来の値動きを示すものではありません。"
+    )
+
+    st.subheader("相関分析（参考）")
+    st.caption(
+        "価格系は騰落率、金利・金利差・マクロ指標はポイント変化で比較します。"
+        "マクロ指標を含む場合は月次、それ以外は週次です。初期値は、上で選択している指標です。"
+    )
+
+    correlation_period_months = {
+        "3か月": 3,
+        "6か月": 6,
+        "1年": 12,
+        "3年": 36,
+    }
+    correlation_presets = {
+        "為替と日本株": ["USD/JPY", "日経平均株価"],
+        "米金利と半導体株": ["UST 10Y", "SOX指数"],
+        "米金利と米国株": ["UST 10Y", "S&P 500指数"],
+        "米物価と政策金利": ["CPI", "FF金利"],
+    }
+    if "correlation_names" not in st.session_state:
+        st.session_state["correlation_names"] = selected_names[:8]
+
+    st.markdown("##### よく使う組合せ")
+    st.caption("ボタンを押すと、下の相関分析対象へ2指標が設定されます。")
+    preset_columns = st.columns(2)
+    for preset_index, (preset_name, preset_indicators) in enumerate(correlation_presets.items()):
+        with preset_columns[preset_index % 2]:
+            if st.button(
+                preset_name,
+                key=f"correlation_preset_{preset_index}",
+                use_container_width=True,
+                help=" × ".join(preset_indicators),
+            ):
+                st.session_state["correlation_names"] = preset_indicators
+
+    analysis_left, analysis_right = st.columns([1, 2])
+    with analysis_left:
+        correlation_period_label = st.selectbox(
+            "相関を調べる期間", list(correlation_period_months), index=2
+        )
+    with analysis_right:
+        correlation_names = st.multiselect(
+            "相関分析の対象（最大8指標）",
+            options=list(INDICATORS),
+            max_selections=8,
+            key="correlation_names",
+            help="例：USD/JPYと日経平均株価、UST 10YとSOX指数を選択します。",
+        )
+
+    if len(correlation_names) < 2:
+        st.info("相関分析の対象を2つ以上選択してください。")
+    else:
+        correlation_start_date = (
+            pd.Timestamp.today().normalize()
+            - pd.DateOffset(months=correlation_period_months[correlation_period_label])
+            - pd.DateOffset(days=14)
+        ).date()
+        correlation_series: dict[str, pd.Series] = {}
+        correlation_methods: dict[str, str] = {}
+        correlation_errors: list[str] = []
+        with st.spinner("相関分析用のデータを取得しています…"):
+            for name in correlation_names:
+                info = INDICATORS[name]
+                try:
+                    series = load_indicator_data(info, str(correlation_start_date))
+                    correlation_series[name] = series
+                    if info.get("correlation_method"):
+                        correlation_methods[name] = info["correlation_method"]
+                    elif info["category"] == "金利":
+                        correlation_methods[name] = "weekly_change"
+                    else:
+                        correlation_methods[name] = "weekly_return"
+                except Exception as error:
+                    correlation_errors.append(f"{name}: {error}")
+
+        for error in correlation_errors:
+            st.warning(f"相関分析では {error}")
+
+        if len(correlation_series) < 2:
+            st.warning("相関を計算できる指標が2つ以上ありません。")
+        else:
+            correlation_frame, correlation_labels, frequency_label = build_correlation_frame(
+                correlation_series, correlation_methods
+            )
+            minimum_observations = 3 if frequency_label == "月次" else 8
+            correlation_matrix = correlation_frame.corr(min_periods=minimum_observations)
+            pair_table = correlation_pairs(correlation_frame, minimum_observations)
+
+            if pair_table.empty:
+                st.info(f"相関を計算するための共通する{frequency_label}データが十分にありません。")
+            else:
+                pair_table["相関係数"] = pair_table["相関係数"].map(lambda value: f"{value:+.2f}")
+                st.markdown("##### 相関係数一覧")
+                st.dataframe(pair_table, hide_index=True, use_container_width=True)
+
+                st.markdown("##### 相関マトリクス")
+                heatmap = go.Figure(
+                    data=go.Heatmap(
+                        z=correlation_matrix.values,
+                        x=correlation_matrix.columns,
+                        y=correlation_matrix.index,
+                        zmin=-1,
+                        zmax=1,
+                        zmid=0,
+                        colorscale="RdBu",
+                        colorbar=dict(title="相関"),
+                        hovertemplate="%{y} × %{x}<br>相関係数: %{z:.2f}<extra></extra>",
                     )
                 )
-            scatter_figure.update_layout(
-                height=380,
-                margin=dict(l=20, r=20, t=20, b=50),
-                xaxis_title=f"{scatter_x_name}（{correlation_labels[scatter_x_name]}）",
-                yaxis_title=f"{scatter_y_name}（{correlation_labels[scatter_y_name]}）",
-            )
-            st.plotly_chart(scatter_figure, use_container_width=True)
-            if regression is None:
-                st.caption("回帰線と相関係数を計算できる有効なデータが不足しています。")
-            else:
-                st.caption(
-                    f"相関係数: {scatter_correlation:+.2f}｜"
-                    f"回帰式: y = {slope:.3f}x {intercept:+.3f}｜"
-                    f"データ数: {len(scatter_data)}"
-                )
+                heatmap.update_layout(height=450, margin=dict(l=20, r=20, t=20, b=100))
+                st.plotly_chart(heatmap, use_container_width=True)
 
-            st.markdown("##### ローリング相関")
-            if frequency_label == "月次":
-                rolling_windows = {"6か月": 6, "12か月": 12}
-            else:
-                rolling_windows = {"13週": 13, "26週": 26}
-            rolling_window_label = st.selectbox(
-                "計算期間",
-                list(rolling_windows),
-                key=f"rolling_window_{frequency_label}",
-            )
-            rolling_values = rolling_correlation(
-                scatter_data[scatter_x_name],
-                scatter_data[scatter_y_name],
-                rolling_windows[rolling_window_label],
-            )
-            if rolling_values.empty:
-                st.info(
-                    f"{rolling_window_label}ローリング相関を計算するためのデータが"
-                    "十分にありません。相関を調べる期間を長くしてください。"
-                )
-            else:
-                rolling_figure = go.Figure(
+                st.markdown("##### 2指標の散布図")
+                scatter_left, scatter_right = st.columns(2)
+                with scatter_left:
+                    scatter_x_name = st.selectbox("横軸", list(correlation_series), key="correlation_x")
+                with scatter_right:
+                    scatter_y_options = [name for name in correlation_series if name != scatter_x_name]
+                    scatter_y_name = st.selectbox("縦軸", scatter_y_options, key="correlation_y")
+                scatter_data = correlation_frame[[scatter_x_name, scatter_y_name]].dropna()
+                scatter_figure = go.Figure(
                     go.Scatter(
-                        x=rolling_values.index,
-                        y=rolling_values,
-                        mode="lines",
-                        name=f"{rolling_window_label}相関",
-                        line=dict(width=2),
-                        hovertemplate="日付: %{x|%Y-%m-%d}<br>相関係数: %{y:.2f}<extra></extra>",
+                        x=scatter_data[scatter_x_name],
+                        y=scatter_data[scatter_y_name],
+                        mode="markers",
+                        name="データ",
+                        marker=dict(size=8, opacity=0.7),
+                        text=[observed.strftime("%Y-%m-%d") for observed in scatter_data.index],
+                        hovertemplate=(
+                            f"{frequency_label}: %{{text}}<br>"
+                            "横軸: %{x:.2f}<br>縦軸: %{y:.2f}<extra></extra>"
+                        ),
                     )
                 )
-                rolling_figure.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray")
-                rolling_figure.update_layout(
-                    height=340,
-                    margin=dict(l=20, r=20, t=20, b=40),
-                    yaxis=dict(title="相関係数", range=[-1.05, 1.05]),
-                    xaxis_title="日付",
+                regression = linear_regression_summary(
+                    scatter_data[scatter_x_name], scatter_data[scatter_y_name]
                 )
-                st.plotly_chart(rolling_figure, use_container_width=True)
-                st.caption(
-                    f"最新の{rolling_window_label}相関: {rolling_values.iloc[-1]:+.2f}｜"
-                    f"{scatter_x_name} × {scatter_y_name}"
+                if regression is not None:
+                    slope, intercept, scatter_correlation = regression
+                    line_x = [
+                        float(scatter_data[scatter_x_name].min()),
+                        float(scatter_data[scatter_x_name].max()),
+                    ]
+                    line_y = [slope * value + intercept for value in line_x]
+                    scatter_figure.add_trace(
+                        go.Scatter(
+                            x=line_x,
+                            y=line_y,
+                            mode="lines",
+                            name="回帰線",
+                            line=dict(color="#ff7f0e", width=2),
+                            hoverinfo="skip",
+                        )
+                    )
+                scatter_figure.update_layout(
+                    height=380,
+                    margin=dict(l=20, r=20, t=20, b=50),
+                    xaxis_title=f"{scatter_x_name}（{correlation_labels[scatter_x_name]}）",
+                    yaxis_title=f"{scatter_y_name}（{correlation_labels[scatter_y_name]}）",
                 )
+                st.plotly_chart(scatter_figure, use_container_width=True)
+                if regression is None:
+                    st.caption("回帰線と相関係数を計算できる有効なデータが不足しています。")
+                else:
+                    st.caption(
+                        f"相関係数: {scatter_correlation:+.2f}｜"
+                        f"回帰式: y = {slope:.3f}x {intercept:+.3f}｜"
+                        f"データ数: {len(scatter_data)}"
+                    )
 
-        st.caption("相関係数は-1から+1です。相関は因果関係や将来の値動きを示すものではなく、景気・インフレ・リスク回避など市場環境によって変化します。")
+                st.markdown("##### ローリング相関")
+                if frequency_label == "月次":
+                    rolling_windows = {"6か月": 6, "12か月": 12}
+                else:
+                    rolling_windows = {"13週": 13, "26週": 26}
+                rolling_window_label = st.selectbox(
+                    "計算期間",
+                    list(rolling_windows),
+                    key=f"rolling_window_{frequency_label}",
+                )
+                rolling_values = rolling_correlation(
+                    scatter_data[scatter_x_name],
+                    scatter_data[scatter_y_name],
+                    rolling_windows[rolling_window_label],
+                )
+                if rolling_values.empty:
+                    st.info(
+                        f"{rolling_window_label}ローリング相関を計算するためのデータが"
+                        "十分にありません。相関を調べる期間を長くしてください。"
+                    )
+                else:
+                    rolling_figure = go.Figure(
+                        go.Scatter(
+                            x=rolling_values.index,
+                            y=rolling_values,
+                            mode="lines",
+                            name=f"{rolling_window_label}相関",
+                            line=dict(width=2),
+                            hovertemplate="日付: %{x|%Y-%m-%d}<br>相関係数: %{y:.2f}<extra></extra>",
+                        )
+                    )
+                    rolling_figure.add_hline(y=0, line_width=1, line_dash="dot", line_color="gray")
+                    rolling_figure.update_layout(
+                        height=340,
+                        margin=dict(l=20, r=20, t=20, b=40),
+                        yaxis=dict(title="相関係数", range=[-1.05, 1.05]),
+                        xaxis_title="日付",
+                    )
+                    st.plotly_chart(rolling_figure, use_container_width=True)
+                    st.caption(
+                        f"最新の{rolling_window_label}相関: {rolling_values.iloc[-1]:+.2f}｜"
+                        f"{scatter_x_name} × {scatter_y_name}"
+                    )
 
-st.subheader("米国マクロ局面（参考）")
-try:
-    regime_start_date = (pd.Timestamp.today().normalize() - pd.DateOffset(years=15)).date()
-    with st.spinner("マクロ指標を確認しています…"):
-        macro_cpi = load_data("fred", "CPIAUCSL", str(regime_start_date))
-        macro_unemployment = load_data("fred", "UNRATE", str(regime_start_date))
-        macro_fed_funds = load_data("fred", "FEDFUNDS", str(regime_start_date))
-        macro_ust_2y = load_data("fred", "DGS2", str(regime_start_date))
-        macro_ust_10y = load_data("fred", "DGS10", str(regime_start_date))
-        macro_regime = assess_us_macro_regime(
-            cpi=macro_cpi,
-            unemployment=macro_unemployment,
-            fed_funds=macro_fed_funds,
-            ust_2y=macro_ust_2y,
-            ust_10y=macro_ust_10y,
-        )
-        macro_trends = build_us_macro_trends(
-            cpi=macro_cpi,
-            unemployment=macro_unemployment,
-            fed_funds=macro_fed_funds,
-            ust_2y=macro_ust_2y,
-            ust_10y=macro_ust_10y,
-        )
-        macro_assessment_labels, macro_assessment_scores = (
-            build_us_macro_assessment_history(
+            st.caption("相関係数は-1から+1です。相関は因果関係や将来の値動きを示すものではなく、景気・インフレ・リスク回避など市場環境によって変化します。")
+
+    st.subheader("米国マクロ局面（参考）")
+    try:
+        regime_start_date = (pd.Timestamp.today().normalize() - pd.DateOffset(years=15)).date()
+        with st.spinner("マクロ指標を確認しています…"):
+            macro_cpi = load_data("fred", "CPIAUCSL", str(regime_start_date))
+            macro_unemployment = load_data("fred", "UNRATE", str(regime_start_date))
+            macro_fed_funds = load_data("fred", "FEDFUNDS", str(regime_start_date))
+            macro_ust_2y = load_data("fred", "DGS2", str(regime_start_date))
+            macro_ust_10y = load_data("fred", "DGS10", str(regime_start_date))
+            macro_regime = assess_us_macro_regime(
                 cpi=macro_cpi,
                 unemployment=macro_unemployment,
                 fed_funds=macro_fed_funds,
                 ust_2y=macro_ust_2y,
                 ust_10y=macro_ust_10y,
             )
-        )
-        macro_focus_guide = build_macro_focus_guide(macro_regime)
-
-    macro_trends = {
-        name: series.loc[
-            pd.Timestamp.today().normalize() - pd.DateOffset(months=36) :
-        ]
-        for name, series in macro_trends.items()
-    }
-    macro_assessment_labels_display = macro_assessment_labels.tail(48)
-    macro_assessment_scores_display = macro_assessment_scores.tail(48)
-
-    st.info(f"**{macro_regime['regime']}**  \n{macro_regime['description']}")
-    inflation = macro_regime["inflation"]
-    labor = macro_regime["labor"]
-    policy = macro_regime["policy"]
-    curve = macro_regime["curve"]
-    macro_columns = st.columns(4)
-    macro_columns[0].metric(
-        "インフレ（CPI前年比）",
-        f"{inflation['value']:.2f}%",
-        delta=f"3か月: {inflation['change']:+.2f}pt（{inflation['status']}）",
-        help=f"最新値: {inflation['date']:%Y-%m-%d}",
-    )
-    macro_columns[1].metric(
-        "雇用（失業率）",
-        f"{labor['value']:.2f}%",
-        delta=f"3か月: {labor['change']:+.2f}pt（{labor['status']}）",
-        help=f"最新値: {labor['date']:%Y-%m-%d}",
-    )
-    macro_columns[2].metric(
-        "金融政策（FF金利）",
-        f"{policy['value']:.2f}%",
-        delta=f"3か月: {policy['change']:+.2f}pt（{policy['status']}）",
-        help=f"最新値: {policy['date']:%Y-%m-%d}",
-    )
-    macro_columns[3].metric(
-        "長短金利差（10年−2年）",
-        f"{curve['spread']:+.2f}pt",
-        delta=curve["status"],
-        help=f"UST 10Y: {curve['ust_10y']:.2f}% / UST 2Y: {curve['ust_2y']:.2f}%（{curve['date']:%Y-%m-%d}）",
-    )
-    with st.expander("現在の局面で確認したい指標・セクター", expanded=True):
-        st.caption("各評価に関連する指標を、確認の観点とともに参考表示します。")
-        for focus_index, focus in enumerate(macro_focus_guide):
-            if focus_index % 2 == 0:
-                focus_columns = st.columns(2)
-            focus_card = focus_columns[focus_index % 2].container(border=True)
-            focus_card.markdown(f"**{focus['dimension']}｜{focus['status']}**")
-            focus_card.write("・".join(focus["indicators"]))
-            focus_card.caption(focus["reason"])
-        st.caption(
-            "局面判定に関連して値動きを確認しやすい候補であり、上昇・下落の予測や売買推奨ではありません。"
-        )
-    with st.expander("過去の評価と比較する", expanded=True):
-        assessment_figure = go.Figure(
-            go.Heatmap(
-                x=macro_assessment_scores_display.index,
-                y=list(macro_assessment_scores_display.columns),
-                z=macro_assessment_scores_display.T.to_numpy(),
-                customdata=macro_assessment_labels_display.T.to_numpy(),
-                zmin=-1,
-                zmax=1,
-                colorscale=[
-                    [0.0, "#d9534f"],
-                    [0.49, "#d9534f"],
-                    [0.5, "#b7b7b7"],
-                    [0.51, "#5cb85c"],
-                    [1.0, "#5cb85c"],
-                ],
-                showscale=False,
-                xgap=1,
-                ygap=2,
-                hovertemplate="%{y}<br>%{x|%Y年%m月}: %{customdata}<extra></extra>",
+            macro_trends = build_us_macro_trends(
+                cpi=macro_cpi,
+                unemployment=macro_unemployment,
+                fed_funds=macro_fed_funds,
+                ust_2y=macro_ust_2y,
+                ust_10y=macro_ust_10y,
             )
-        )
-        assessment_figure.update_layout(
-            height=280,
-            margin=dict(l=20, r=20, t=20, b=40),
-            xaxis=dict(title="判定月", tickformat="%Y-%m"),
-            yaxis=dict(autorange="reversed"),
-        )
-        st.plotly_chart(assessment_figure, use_container_width=True)
-        st.caption(
-            "緑は改善・鈍化・緩和・順イールド、灰色は横ばい、"
-            "赤は悪化・上昇・引き締め・逆イールドです。各月時点の直近3か月変化で再判定します。"
-        )
-    with st.expander("判定指標の推移を見る"):
-        macro_trend_figure = make_subplots(
-            rows=2,
-            cols=2,
-            subplot_titles=list(macro_trends),
-            vertical_spacing=0.16,
-            horizontal_spacing=0.1,
-        )
-        for trend_index, (trend_name, trend_series) in enumerate(macro_trends.items()):
-            row = trend_index // 2 + 1
-            column = trend_index % 2 + 1
-            macro_trend_figure.add_trace(
-                go.Scatter(
-                    x=trend_series.index,
-                    y=trend_series,
-                    mode="lines",
-                    name=trend_name,
-                    hovertemplate="日付: %{x|%Y-%m-%d}<br>値: %{y:.2f}<extra></extra>",
-                ),
-                row=row,
-                col=column,
+            macro_assessment_labels, macro_assessment_scores = (
+                build_us_macro_assessment_history(
+                    cpi=macro_cpi,
+                    unemployment=macro_unemployment,
+                    fed_funds=macro_fed_funds,
+                    ust_2y=macro_ust_2y,
+                    ust_10y=macro_ust_10y,
+                )
             )
-            macro_trend_figure.update_yaxes(
-                title_text="pt" if trend_name == "10年−2年金利差" else "%",
-                row=row,
-                col=column,
-            )
-        macro_trend_figure.add_hline(
-            y=0,
-            line_width=1,
-            line_dash="dot",
-            line_color="gray",
-            row=2,
-            col=2,
-        )
-        macro_trend_figure.update_layout(
-            height=650,
-            showlegend=False,
-            hovermode="x unified",
-            margin=dict(l=20, r=20, t=45, b=35),
-        )
-        st.plotly_chart(macro_trend_figure, use_container_width=True)
-        st.caption("表示期間は直近約3年です。判定には各指標の最新値と3か月変化を使います。")
-    st.markdown("#### レジーム別リターン分析")
-    st.caption(
-        "現在と同じ、または近い4つのマクロ評価だった過去の月から、"
-        "その後の資産パフォーマンスを集計します。"
-    )
-    regime_match_mode = st.radio(
-        "過去局面の一致条件",
-        ["完全一致（4評価すべて）", "近似を含む（4評価中3つ以上）"],
-        horizontal=True,
-        key="regime_return_match_mode",
-    )
-    active_regime_labels = current_regime_labels(macro_regime)
-    st.caption(
-        "現在の評価: "
-        + " / ".join(
-            f"{dimension}={status}"
-            for dimension, status in active_regime_labels.items()
-        )
-    )
-    if st.button(
-        "過去リターンを分析",
-        key="run_regime_return_analysis",
-        use_container_width=True,
-    ):
-        st.session_state["show_regime_return_analysis"] = True
+            macro_focus_guide = build_macro_focus_guide(macro_regime)
 
-    if st.session_state.get("show_regime_return_analysis", False):
-        regime_asset_series: dict[str, pd.Series] = {}
-        regime_asset_methods: dict[str, str] = {}
-        regime_asset_errors: list[str] = []
-        with st.spinner("過去の各資産リターンを集計しています…"):
-            for display_name, (
-                indicator_name,
-                method,
-            ) in REGIME_ASSET_DEFINITIONS.items():
-                try:
-                    regime_asset_series[display_name] = load_indicator_data(
-                        INDICATORS[indicator_name], str(regime_start_date)
-                    )
-                    regime_asset_methods[display_name] = method
-                except Exception as asset_error:
-                    regime_asset_errors.append(f"{display_name}: {asset_error}")
-
-        for asset_error in regime_asset_errors:
-            st.warning(f"レジーム別リターン分析では {asset_error}")
-
-        if regime_asset_series:
-            minimum_dimensions = 4 if regime_match_mode.startswith("完全一致") else 3
-            regime_performance = analyze_regime_forward_performance(
-                regime_history=macro_assessment_labels,
-                current_labels=active_regime_labels,
-                asset_series=regime_asset_series,
-                methods_by_asset=regime_asset_methods,
-                minimum_matching_dimensions=minimum_dimensions,
-            )
-            for horizon_label in ["1か月後", "3か月後", "6か月後"]:
-                with st.expander(horizon_label, expanded=horizon_label == "3か月後"):
-                    horizon_table = regime_performance[
-                        regime_performance["期間"] == horizon_label
-                    ].copy()
-                    for column in ["平均", "中央値"]:
-                        horizon_table[column] = horizon_table.apply(
-                            lambda row: (
-                                "—"
-                                if pd.isna(row[column])
-                                else f"{row[column]:+.2f}{row['単位']}"
-                            ),
-                            axis=1,
-                        )
-                    horizon_table["上昇確率"] = horizon_table["上昇確率"].map(
-                        lambda value: "—" if pd.isna(value) else f"{value:.1f}%"
-                    )
-                    st.dataframe(
-                        horizon_table.drop(columns=["期間", "単位"]),
-                        hide_index=True,
-                        use_container_width=True,
-                    )
-            low_sample_rows = regime_performance[
-                regime_performance["注意"] == "サンプル少"
+        macro_trends = {
+            name: series.loc[
+                pd.Timestamp.today().normalize() - pd.DateOffset(months=36) :
             ]
-            if not low_sample_rows.empty:
-                st.warning(
-                    "サンプル数が12未満の組合せがあります。結果のばらつきが大きいため、"
-                    "平均値だけで判断しないでください。"
-                )
-            st.caption(
-                "サンプル数は一致した月次観測数です。3か月後・6か月後は計測期間が重なるため、"
-                "互いに独立した標本ではありません。米10年金利はリターンではなく変化幅（bp）、"
-                "TOPIXは1306 ETFによる近似です。過去の傾向であり、将来予測や投資助言ではありません。"
-            )
-    st.caption("CPI前年比・失業率・FF金利の直近3か月変化と、米国債10年−2年の利回り差による参考判定です。投資判断や将来の市場動向を保証するものではありません。")
-except Exception as error:
-    st.warning(f"米国マクロ局面を判定できませんでした: {error}")
-
-st.subheader("投資テーマ別ビュー（参考）")
-st.caption(
-    "既存の指標・急変検知・相関・マクロ局面・イベントを、投資テーマ単位でまとめ直します。"
-)
-selected_theme_name = st.selectbox(
-    "確認するテーマ", list(THEME_DEFINITIONS), key="investment_theme"
-)
-selected_theme = THEME_DEFINITIONS[selected_theme_name]
-st.info(f"**{selected_theme_name}**  \n{selected_theme['description']}")
-theme_history_start = (
-    pd.Timestamp.today().normalize() - pd.DateOffset(years=5) - pd.DateOffset(days=120)
-).date()
-try:
-    theme_series: dict[str, pd.Series] = {}
-    theme_errors: list[str] = []
-    with st.spinner(f"{selected_theme_name}テーマのデータをまとめています…"):
-        for theme_indicator_name in selected_theme["indicators"]:
-            try:
-                theme_series[theme_indicator_name] = load_indicator_data(
-                    INDICATORS[theme_indicator_name], str(theme_history_start)
-                )
-            except Exception as theme_error:
-                theme_errors.append(f"{theme_indicator_name}: {theme_error}")
-    for theme_error in theme_errors:
-        st.warning(f"テーマ別ビューでは {theme_error}")
-
-    theme_snapshot = build_theme_snapshot(theme_series, INDICATORS)
-    if theme_snapshot.empty:
-        st.info("テーマの最新状況を表示できるデータがありません。")
-    else:
-        theme_snapshot_display = theme_snapshot.copy()
-        theme_snapshot_display["最新値"] = theme_snapshot_display.apply(
-            lambda row: f"{row['最新値']:,.2f} {row['単位']}", axis=1
-        )
-        for change_column in ("直前変化", "1か月変化"):
-            theme_snapshot_display[change_column] = theme_snapshot_display.apply(
-                lambda row: (
-                    "—"
-                    if pd.isna(row[change_column])
-                    else f"{row[change_column]:+.2f}{row['変化単位']}"
-                ),
-                axis=1,
-            )
-        theme_snapshot_display["データ日"] = theme_snapshot_display["データ日"].dt.strftime(
-            "%Y-%m-%d"
-        )
-        st.markdown("##### テーマの現在地")
-        st.dataframe(
-            theme_snapshot_display[
-                ["指標", "最新値", "直前変化", "1か月変化", "データ日"]
-            ],
-            hide_index=True,
-            use_container_width=True,
-        )
-
-        price_theme_series = {
-            name: series
-            for name, series in theme_series.items()
-            if INDICATORS[name]["category"] != "金利"
+            for name, series in macro_trends.items()
         }
-        theme_move_alerts = detect_market_moves(price_theme_series, alert_thresholds)
-        if theme_move_alerts.empty:
-            st.caption("設定中の急変検知基準を超えるテーマ指標はありません。")
-        else:
-            strongest_theme_alert = theme_move_alerts.iloc[0]
-            st.warning(
-                f"急変: {strongest_theme_alert['指標']}が{strongest_theme_alert['期間']}で"
-                f"{strongest_theme_alert['騰落率']:+.2f}%（{strongest_theme_alert['方向']}）"
-            )
+        macro_assessment_labels_display = macro_assessment_labels.tail(48)
+        macro_assessment_scores_display = macro_assessment_scores.tail(48)
 
-        relative_left, relative_right = selected_theme["relative_pair"]
-        if relative_left in theme_series and relative_right in theme_series:
-            relative_values, relative_month_change = relative_strength(
-                theme_series[relative_left], theme_series[relative_right]
-            )
-            if not relative_values.empty:
-                relative_values = relative_values.loc[
-                    relative_values.index
-                    >= pd.Timestamp.today().normalize() - pd.DateOffset(months=6)
-                ]
-                st.markdown("##### 相対強度")
-                relative_figure = go.Figure(
-                    go.Scatter(
-                        x=relative_values.index,
-                        y=relative_values,
-                        mode="lines",
-                        name=f"{relative_left} / {relative_right}",
-                        line=dict(width=2),
-                        hovertemplate="日付: %{x|%Y-%m-%d}<br>相対強度: %{y:.2f}<extra></extra>",
-                    )
-                )
-                relative_figure.add_hline(
-                    y=100, line_width=1, line_dash="dot", line_color="gray"
-                )
-                relative_figure.update_layout(
-                    height=280,
-                    margin=dict(l=20, r=20, t=20, b=40),
-                    yaxis_title="取得開始日=100",
-                    xaxis_title="日付",
-                )
-                st.plotly_chart(relative_figure, use_container_width=True)
-                relative_direction = (
-                    "優位"
-                    if relative_month_change is not None and relative_month_change > 0
-                    else "劣位"
-                    if relative_month_change is not None and relative_month_change < 0
-                    else "横ばい"
-                )
-                st.caption(
-                    f"{relative_left}は{relative_right}に対して直近1か月で"
-                    f"{relative_direction}"
-                    + (
-                        ""
-                        if relative_month_change is None
-                        else f"（相対強度 {relative_month_change:+.2f}%）"
-                    )
-                )
-
-        correlation_left, correlation_right = selected_theme["correlation_pair"]
-        if correlation_left in theme_series and correlation_right in theme_series:
-            theme_correlation_methods = {
-                name: (
-                    "change" if INDICATORS[name]["category"] == "金利" else "return"
-                )
-                for name in (correlation_left, correlation_right)
-            }
-            theme_daily_frame, _ = build_daily_change_frame(
-                {
-                    correlation_left: theme_series[correlation_left],
-                    correlation_right: theme_series[correlation_right],
-                },
-                theme_correlation_methods,
-            )
-            theme_correlation_summary = correlation_change_summary(
-                theme_daily_frame[correlation_left], theme_daily_frame[correlation_right]
-            )
-            if not theme_correlation_summary.empty:
-                st.markdown("##### 市場間関係")
-                correlation_columns = st.columns(len(theme_correlation_summary))
-                for column, (_, correlation_row) in zip(
-                    correlation_columns, theme_correlation_summary.iterrows()
-                ):
-                    column.metric(
-                        f"{correlation_row['期間']}相関",
-                        f"{correlation_row['現在']:+.2f}",
-                        delta=f"1か月前比 {correlation_row['21日差']:+.2f}",
-                        help=(
-                            f"{correlation_left} × {correlation_right}｜"
-                            f"過去5年percentile {correlation_row['percentile']:.0f}%"
-                        ),
-                    )
-                for theme_correlation_alert in correlation_change_alerts(
-                    theme_correlation_summary
-                ):
-                    st.warning(f"相関変化シグナル: {theme_correlation_alert}")
-
-        if "macro_regime" in locals():
-            st.markdown("##### マクロ局面")
-            st.write(f"**{macro_regime['regime']}** — {macro_regime['description']}")
-
-        theme_events = upcoming_theme_events(
-            build_us_economic_events(),
-            selected_theme["event_types"],
-            pd.Timestamp.today().normalize(),
+        st.info(f"**{macro_regime['regime']}**  \n{macro_regime['description']}")
+        inflation = macro_regime["inflation"]
+        labor = macro_regime["labor"]
+        policy = macro_regime["policy"]
+        curve = macro_regime["curve"]
+        macro_columns = st.columns(4)
+        macro_columns[0].metric(
+            "インフレ（CPI前年比）",
+            f"{inflation['value']:.2f}%",
+            delta=f"3か月: {inflation['change']:+.2f}pt（{inflation['status']}）",
+            help=f"最新値: {inflation['date']:%Y-%m-%d}",
         )
-        st.markdown("##### 関連イベント")
-        if theme_events.empty:
-            st.caption("収録期間内に今後の関連イベントはありません。")
-        else:
-            theme_event_display = theme_events.copy()
-            theme_event_display["日本時間"] = theme_event_display["datetime"].dt.strftime(
-                "%Y-%m-%d %H:%M"
+        macro_columns[1].metric(
+            "雇用（失業率）",
+            f"{labor['value']:.2f}%",
+            delta=f"3か月: {labor['change']:+.2f}pt（{labor['status']}）",
+            help=f"最新値: {labor['date']:%Y-%m-%d}",
+        )
+        macro_columns[2].metric(
+            "金融政策（FF金利）",
+            f"{policy['value']:.2f}%",
+            delta=f"3か月: {policy['change']:+.2f}pt（{policy['status']}）",
+            help=f"最新値: {policy['date']:%Y-%m-%d}",
+        )
+        macro_columns[3].metric(
+            "長短金利差（10年−2年）",
+            f"{curve['spread']:+.2f}pt",
+            delta=curve["status"],
+            help=f"UST 10Y: {curve['ust_10y']:.2f}% / UST 2Y: {curve['ust_2y']:.2f}%（{curve['date']:%Y-%m-%d}）",
+        )
+        with st.expander("現在の局面で確認したい指標・セクター", expanded=True):
+            st.caption("各評価に関連する指標を、確認の観点とともに参考表示します。")
+            for focus_index, focus in enumerate(macro_focus_guide):
+                if focus_index % 2 == 0:
+                    focus_columns = st.columns(2)
+                focus_card = focus_columns[focus_index % 2].container(border=True)
+                focus_card.markdown(f"**{focus['dimension']}｜{focus['status']}**")
+                focus_card.write("・".join(focus["indicators"]))
+                focus_card.caption(focus["reason"])
+            st.caption(
+                "局面判定に関連して値動きを確認しやすい候補であり、上昇・下落の予測や売買推奨ではありません。"
             )
+        with st.expander("過去の評価と比較する", expanded=True):
+            assessment_figure = go.Figure(
+                go.Heatmap(
+                    x=macro_assessment_scores_display.index,
+                    y=list(macro_assessment_scores_display.columns),
+                    z=macro_assessment_scores_display.T.to_numpy(),
+                    customdata=macro_assessment_labels_display.T.to_numpy(),
+                    zmin=-1,
+                    zmax=1,
+                    colorscale=[
+                        [0.0, "#d9534f"],
+                        [0.49, "#d9534f"],
+                        [0.5, "#b7b7b7"],
+                        [0.51, "#5cb85c"],
+                        [1.0, "#5cb85c"],
+                    ],
+                    showscale=False,
+                    xgap=1,
+                    ygap=2,
+                    hovertemplate="%{y}<br>%{x|%Y年%m月}: %{customdata}<extra></extra>",
+                )
+            )
+            assessment_figure.update_layout(
+                height=280,
+                margin=dict(l=20, r=20, t=20, b=40),
+                xaxis=dict(title="判定月", tickformat="%Y-%m"),
+                yaxis=dict(autorange="reversed"),
+            )
+            st.plotly_chart(assessment_figure, use_container_width=True)
+            st.caption(
+                "緑は改善・鈍化・緩和・順イールド、灰色は横ばい、"
+                "赤は悪化・上昇・引き締め・逆イールドです。各月時点の直近3か月変化で再判定します。"
+            )
+        with st.expander("判定指標の推移を見る"):
+            macro_trend_figure = make_subplots(
+                rows=2,
+                cols=2,
+                subplot_titles=list(macro_trends),
+                vertical_spacing=0.16,
+                horizontal_spacing=0.1,
+            )
+            for trend_index, (trend_name, trend_series) in enumerate(macro_trends.items()):
+                row = trend_index // 2 + 1
+                column = trend_index % 2 + 1
+                macro_trend_figure.add_trace(
+                    go.Scatter(
+                        x=trend_series.index,
+                        y=trend_series,
+                        mode="lines",
+                        name=trend_name,
+                        hovertemplate="日付: %{x|%Y-%m-%d}<br>値: %{y:.2f}<extra></extra>",
+                    ),
+                    row=row,
+                    col=column,
+                )
+                macro_trend_figure.update_yaxes(
+                    title_text="pt" if trend_name == "10年−2年金利差" else "%",
+                    row=row,
+                    col=column,
+                )
+            macro_trend_figure.add_hline(
+                y=0,
+                line_width=1,
+                line_dash="dot",
+                line_color="gray",
+                row=2,
+                col=2,
+            )
+            macro_trend_figure.update_layout(
+                height=650,
+                showlegend=False,
+                hovermode="x unified",
+                margin=dict(l=20, r=20, t=45, b=35),
+            )
+            st.plotly_chart(macro_trend_figure, use_container_width=True)
+            st.caption("表示期間は直近約3年です。判定には各指標の最新値と3か月変化を使います。")
+        st.markdown("#### レジーム別リターン分析")
+        st.caption(
+            "現在と同じ、または近い4つのマクロ評価だった過去の月から、"
+            "その後の資産パフォーマンスを集計します。"
+        )
+        regime_match_mode = st.radio(
+            "過去局面の一致条件",
+            ["完全一致（4評価すべて）", "近似を含む（4評価中3つ以上）"],
+            horizontal=True,
+            key="regime_return_match_mode",
+        )
+        active_regime_labels = current_regime_labels(macro_regime)
+        st.caption(
+            "現在の評価: "
+            + " / ".join(
+                f"{dimension}={status}"
+                for dimension, status in active_regime_labels.items()
+            )
+        )
+        if st.button(
+            "過去リターンを分析",
+            key="run_regime_return_analysis",
+            use_container_width=True,
+        ):
+            st.session_state["show_regime_return_analysis"] = True
+
+        if st.session_state.get("show_regime_return_analysis", False):
+            regime_asset_series: dict[str, pd.Series] = {}
+            regime_asset_methods: dict[str, str] = {}
+            regime_asset_errors: list[str] = []
+            with st.spinner("過去の各資産リターンを集計しています…"):
+                for display_name, (
+                    indicator_name,
+                    method,
+                ) in REGIME_ASSET_DEFINITIONS.items():
+                    try:
+                        regime_asset_series[display_name] = load_indicator_data(
+                            INDICATORS[indicator_name], str(regime_start_date)
+                        )
+                        regime_asset_methods[display_name] = method
+                    except Exception as asset_error:
+                        regime_asset_errors.append(f"{display_name}: {asset_error}")
+
+            for asset_error in regime_asset_errors:
+                st.warning(f"レジーム別リターン分析では {asset_error}")
+
+            if regime_asset_series:
+                minimum_dimensions = 4 if regime_match_mode.startswith("完全一致") else 3
+                regime_performance = analyze_regime_forward_performance(
+                    regime_history=macro_assessment_labels,
+                    current_labels=active_regime_labels,
+                    asset_series=regime_asset_series,
+                    methods_by_asset=regime_asset_methods,
+                    minimum_matching_dimensions=minimum_dimensions,
+                )
+                for horizon_label in ["1か月後", "3か月後", "6か月後"]:
+                    with st.expander(horizon_label, expanded=horizon_label == "3か月後"):
+                        horizon_table = regime_performance[
+                            regime_performance["期間"] == horizon_label
+                        ].copy()
+                        for column in ["平均", "中央値"]:
+                            horizon_table[column] = horizon_table.apply(
+                                lambda row: (
+                                    "—"
+                                    if pd.isna(row[column])
+                                    else f"{row[column]:+.2f}{row['単位']}"
+                                ),
+                                axis=1,
+                            )
+                        horizon_table["上昇確率"] = horizon_table["上昇確率"].map(
+                            lambda value: "—" if pd.isna(value) else f"{value:.1f}%"
+                        )
+                        st.dataframe(
+                            horizon_table.drop(columns=["期間", "単位"]),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+                low_sample_rows = regime_performance[
+                    regime_performance["注意"] == "サンプル少"
+                ]
+                if not low_sample_rows.empty:
+                    st.warning(
+                        "サンプル数が12未満の組合せがあります。結果のばらつきが大きいため、"
+                        "平均値だけで判断しないでください。"
+                    )
+                st.caption(
+                    "サンプル数は一致した月次観測数です。3か月後・6か月後は計測期間が重なるため、"
+                    "互いに独立した標本ではありません。米10年金利はリターンではなく変化幅（bp）、"
+                    "TOPIXは1306 ETFによる近似です。過去の傾向であり、将来予測や投資助言ではありません。"
+                )
+        st.caption("CPI前年比・失業率・FF金利の直近3か月変化と、米国債10年−2年の利回り差による参考判定です。投資判断や将来の市場動向を保証するものではありません。")
+    except Exception as error:
+        st.warning(f"米国マクロ局面を判定できませんでした: {error}")
+
+with theme_tab:
+    st.subheader("投資テーマ別ビュー（参考）")
+    st.caption(
+        "既存の指標・急変検知・相関・マクロ局面・イベントを、投資テーマ単位でまとめ直します。"
+    )
+    selected_theme_name = st.selectbox(
+        "確認するテーマ", list(THEME_DEFINITIONS), key="investment_theme"
+    )
+    selected_theme = THEME_DEFINITIONS[selected_theme_name]
+    st.info(f"**{selected_theme_name}**  \n{selected_theme['description']}")
+    theme_history_start = (
+        pd.Timestamp.today().normalize() - pd.DateOffset(years=5) - pd.DateOffset(days=120)
+    ).date()
+    try:
+        theme_series: dict[str, pd.Series] = {}
+        theme_errors: list[str] = []
+        with st.spinner(f"{selected_theme_name}テーマのデータをまとめています…"):
+            for theme_indicator_name in selected_theme["indicators"]:
+                try:
+                    theme_series[theme_indicator_name] = load_indicator_data(
+                        INDICATORS[theme_indicator_name], str(theme_history_start)
+                    )
+                except Exception as theme_error:
+                    theme_errors.append(f"{theme_indicator_name}: {theme_error}")
+        for theme_error in theme_errors:
+            st.warning(f"テーマ別ビューでは {theme_error}")
+
+        theme_snapshot = build_theme_snapshot(theme_series, INDICATORS)
+        if theme_snapshot.empty:
+            st.info("テーマの最新状況を表示できるデータがありません。")
+        else:
+            theme_snapshot_display = theme_snapshot.copy()
+            theme_snapshot_display["最新値"] = theme_snapshot_display.apply(
+                lambda row: f"{row['最新値']:,.2f} {row['単位']}", axis=1
+            )
+            for change_column in ("直前変化", "1か月変化"):
+                theme_snapshot_display[change_column] = theme_snapshot_display.apply(
+                    lambda row: (
+                        "—"
+                        if pd.isna(row[change_column])
+                        else f"{row[change_column]:+.2f}{row['変化単位']}"
+                    ),
+                    axis=1,
+                )
+            theme_snapshot_display["データ日"] = theme_snapshot_display["データ日"].dt.strftime(
+                "%Y-%m-%d"
+            )
+            st.markdown("##### テーマの現在地")
             st.dataframe(
-                theme_event_display[["日本時間", "event", "importance"]].rename(
-                    columns={"event": "イベント", "importance": "重要度"}
-                ),
+                theme_snapshot_display[
+                    ["指標", "最新値", "直前変化", "1か月変化", "データ日"]
+                ],
                 hide_index=True,
                 use_container_width=True,
             )
-    st.caption(
-        "テーマ別ビューは関連データを一か所に整理する機能です。相対強度・相関・急変は"
-        "将来予測や売買推奨ではなく、投資判断の材料として表示しています。"
-    )
-except Exception as error:
-    st.warning(f"投資テーマ別ビューを表示できませんでした: {error}")
+
+            price_theme_series = {
+                name: series
+                for name, series in theme_series.items()
+                if INDICATORS[name]["category"] != "金利"
+            }
+            theme_move_alerts = detect_market_moves(price_theme_series, alert_thresholds)
+            if theme_move_alerts.empty:
+                st.caption("設定中の急変検知基準を超えるテーマ指標はありません。")
+            else:
+                strongest_theme_alert = theme_move_alerts.iloc[0]
+                st.warning(
+                    f"急変: {strongest_theme_alert['指標']}が{strongest_theme_alert['期間']}で"
+                    f"{strongest_theme_alert['騰落率']:+.2f}%（{strongest_theme_alert['方向']}）"
+                )
+
+            relative_left, relative_right = selected_theme["relative_pair"]
+            if relative_left in theme_series and relative_right in theme_series:
+                relative_values, relative_month_change = relative_strength(
+                    theme_series[relative_left], theme_series[relative_right]
+                )
+                if not relative_values.empty:
+                    relative_values = relative_values.loc[
+                        relative_values.index
+                        >= pd.Timestamp.today().normalize() - pd.DateOffset(months=6)
+                    ]
+                    st.markdown("##### 相対強度")
+                    relative_figure = go.Figure(
+                        go.Scatter(
+                            x=relative_values.index,
+                            y=relative_values,
+                            mode="lines",
+                            name=f"{relative_left} / {relative_right}",
+                            line=dict(width=2),
+                            hovertemplate="日付: %{x|%Y-%m-%d}<br>相対強度: %{y:.2f}<extra></extra>",
+                        )
+                    )
+                    relative_figure.add_hline(
+                        y=100, line_width=1, line_dash="dot", line_color="gray"
+                    )
+                    relative_figure.update_layout(
+                        height=280,
+                        margin=dict(l=20, r=20, t=20, b=40),
+                        yaxis_title="取得開始日=100",
+                        xaxis_title="日付",
+                    )
+                    st.plotly_chart(relative_figure, use_container_width=True)
+                    relative_direction = (
+                        "優位"
+                        if relative_month_change is not None and relative_month_change > 0
+                        else "劣位"
+                        if relative_month_change is not None and relative_month_change < 0
+                        else "横ばい"
+                    )
+                    st.caption(
+                        f"{relative_left}は{relative_right}に対して直近1か月で"
+                        f"{relative_direction}"
+                        + (
+                            ""
+                            if relative_month_change is None
+                            else f"（相対強度 {relative_month_change:+.2f}%）"
+                        )
+                    )
+
+            correlation_left, correlation_right = selected_theme["correlation_pair"]
+            if correlation_left in theme_series and correlation_right in theme_series:
+                theme_correlation_methods = {
+                    name: (
+                        "change" if INDICATORS[name]["category"] == "金利" else "return"
+                    )
+                    for name in (correlation_left, correlation_right)
+                }
+                theme_daily_frame, _ = build_daily_change_frame(
+                    {
+                        correlation_left: theme_series[correlation_left],
+                        correlation_right: theme_series[correlation_right],
+                    },
+                    theme_correlation_methods,
+                )
+                theme_correlation_summary = correlation_change_summary(
+                    theme_daily_frame[correlation_left], theme_daily_frame[correlation_right]
+                )
+                if not theme_correlation_summary.empty:
+                    st.markdown("##### 市場間関係")
+                    correlation_columns = st.columns(len(theme_correlation_summary))
+                    for column, (_, correlation_row) in zip(
+                        correlation_columns, theme_correlation_summary.iterrows()
+                    ):
+                        column.metric(
+                            f"{correlation_row['期間']}相関",
+                            f"{correlation_row['現在']:+.2f}",
+                            delta=f"1か月前比 {correlation_row['21日差']:+.2f}",
+                            help=(
+                                f"{correlation_left} × {correlation_right}｜"
+                                f"過去5年percentile {correlation_row['percentile']:.0f}%"
+                            ),
+                        )
+                    for theme_correlation_alert in correlation_change_alerts(
+                        theme_correlation_summary
+                    ):
+                        st.warning(f"相関変化シグナル: {theme_correlation_alert}")
+
+            if "macro_regime" in locals():
+                st.markdown("##### マクロ局面")
+                st.write(f"**{macro_regime['regime']}** — {macro_regime['description']}")
+
+            theme_events = upcoming_theme_events(
+                build_us_economic_events(),
+                selected_theme["event_types"],
+                pd.Timestamp.today().normalize(),
+            )
+            st.markdown("##### 関連イベント")
+            if theme_events.empty:
+                st.caption("収録期間内に今後の関連イベントはありません。")
+            else:
+                theme_event_display = theme_events.copy()
+                theme_event_display["日本時間"] = theme_event_display["datetime"].dt.strftime(
+                    "%Y-%m-%d %H:%M"
+                )
+                st.dataframe(
+                    theme_event_display[["日本時間", "event", "importance"]].rename(
+                        columns={"event": "イベント", "importance": "重要度"}
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+        st.caption(
+            "テーマ別ビューは関連データを一か所に整理する機能です。相対強度・相関・急変は"
+            "将来予測や売買推奨ではなく、投資判断の材料として表示しています。"
+        )
+    except Exception as error:
+        st.warning(f"投資テーマ別ビューを表示できませんでした: {error}")
