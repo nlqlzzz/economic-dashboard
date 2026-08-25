@@ -42,6 +42,12 @@ from regime_returns import (
     analyze_regime_forward_performance,
     current_regime_labels,
 )
+from similar_periods import (
+    SIMILAR_ASSET_DEFINITIONS,
+    SIMILAR_FEATURE_DEFINITIONS,
+    build_point_in_time_features,
+    find_similar_periods,
+)
 from correlation_analysis import (
     build_correlation_frame,
     build_daily_change_frame,
@@ -1284,6 +1290,157 @@ with analysis_tab:
                     "互いに独立した標本ではありません。米10年金利はリターンではなく変化幅（bp）、"
                     "TOPIXは1306 ETFによる近似です。過去の傾向であり、将来予測や投資助言ではありません。"
                 )
+        st.markdown("#### 過去類似局面検索")
+        st.caption(
+            "現在の日次変化とマクロ評価に近い、互いに20取引日より離れた過去局面を検索します。"
+            "対象資産と件数を絞り、その後の実績を参考表示します。"
+        )
+        similar_control_columns = st.columns(2)
+        similar_asset_name = similar_control_columns[0].selectbox(
+            "対象資産", list(SIMILAR_ASSET_DEFINITIONS), key="similar_period_asset"
+        )
+        similar_neighbor_count = similar_control_columns[1].selectbox(
+            "検索件数", [5, 10], key="similar_period_count"
+        )
+        if st.button(
+            "類似局面を検索",
+            key="run_similar_period_search",
+            use_container_width=True,
+        ):
+            st.session_state["show_similar_period_search"] = True
+
+        if st.session_state.get("show_similar_period_search", False):
+            similar_raw_series: dict[str, pd.Series] = {}
+            similar_indicator_series: dict[str, pd.Series] = {}
+            similar_methods: dict[str, str] = {}
+            similar_errors: list[str] = []
+            similar_fallbacks: list[str] = []
+            with st.spinner("過去の日次特徴量と対象資産を確認しています…"):
+                for feature_name, (
+                    indicator_name,
+                    method,
+                ) in SIMILAR_FEATURE_DEFINITIONS.items():
+                    try:
+                        feature_series = load_indicator_data(
+                            INDICATORS[indicator_name], str(regime_start_date)
+                        )
+                        similar_raw_series[feature_name] = feature_series
+                        similar_indicator_series[indicator_name] = feature_series
+                        similar_methods[feature_name] = method
+                        if feature_series.attrs.get("is_fallback"):
+                            similar_fallbacks.append(
+                                f"{feature_name}: {feature_series.attrs['fallback_label']}"
+                                f"（{feature_series.attrs['ticker']}）"
+                            )
+                    except Exception as similar_feature_error:
+                        similar_errors.append(f"{feature_name}: {similar_feature_error}")
+
+                target_indicator_name, target_method = SIMILAR_ASSET_DEFINITIONS[
+                    similar_asset_name
+                ]
+                target_series = similar_indicator_series.get(target_indicator_name)
+                if target_series is None:
+                    try:
+                        target_series = load_indicator_data(
+                            INDICATORS[target_indicator_name], str(regime_start_date)
+                        )
+                        if target_series.attrs.get("is_fallback"):
+                            similar_fallbacks.append(
+                                f"{similar_asset_name}: {target_series.attrs['fallback_label']}"
+                                f"（{target_series.attrs['ticker']}）"
+                            )
+                    except Exception as similar_target_error:
+                        similar_errors.append(
+                            f"対象資産 {similar_asset_name}: {similar_target_error}"
+                        )
+                        target_series = None
+
+            for similar_error in similar_errors:
+                st.warning(f"類似局面検索では取得できない系列があります: {similar_error}")
+            for similar_fallback in similar_fallbacks:
+                st.warning(f"類似局面検索では代替系列を使用します: {similar_fallback}")
+
+            if len(similar_raw_series) < 3:
+                st.warning(
+                    "類似度を計算できる数値特徴量が3系列未満です。取得できた系列を確認してください。"
+                )
+            elif target_series is None:
+                st.warning("対象資産を取得できないため、その後の実績を集計できません。")
+            else:
+                similar_daily_changes, _ = build_daily_change_frame(
+                    similar_raw_series, similar_methods
+                )
+                similar_daily_changes = similar_daily_changes.apply(
+                    pd.to_numeric, errors="coerce"
+                )
+                point_in_time_features, _ = build_point_in_time_features(
+                    similar_daily_changes,
+                    macro_history=macro_assessment_labels,
+                    minimum_history=252,
+                )
+                matches, similar_summary, feature_contributions = find_similar_periods(
+                    point_in_time_features=point_in_time_features,
+                    target_series=target_series,
+                    target_method=target_method,
+                    neighbor_count=similar_neighbor_count,
+                    exclusion_sessions=20,
+                )
+                if matches.empty:
+                    st.info("条件を満たす過去局面を検索できませんでした。")
+                else:
+                    st.caption(
+                        f"基準日: {point_in_time_features.index[-1]:%Y-%m-%d}｜"
+                        f"数値特徴量: {len(similar_raw_series)}系列｜"
+                        f"採用サンプル数: {len(matches)}"
+                    )
+                    match_display = matches.drop(columns=["距離"]).copy()
+                    match_display["類似局面の日付"] = match_display[
+                        "類似局面の日付"
+                    ].dt.strftime("%Y-%m-%d")
+                    match_display["類似度"] = match_display["類似度"].map(
+                        lambda value: f"{value:.1f}"
+                    )
+                    result_unit = "bp" if target_method == "change_bp" else "%"
+                    for result_column in ["1営業日後", "5営業日後", "20営業日後"]:
+                        match_display[result_column] = match_display[result_column].map(
+                            lambda value: f"{value:+.2f}{result_unit}"
+                        )
+                    st.dataframe(match_display, hide_index=True, use_container_width=True)
+
+                    summary_display = similar_summary.copy()
+                    for summary_column in ["平均", "中央値"]:
+                        summary_display[summary_column] = summary_display.apply(
+                            lambda row: f"{row[summary_column]:+.2f}{row['単位']}", axis=1
+                        )
+                    summary_display["上昇確率"] = summary_display["上昇確率"].map(
+                        lambda value: f"{value:.1f}%"
+                    )
+                    st.markdown("##### 選ばれた類似局面の集計")
+                    st.dataframe(
+                        summary_display.drop(columns=["単位"]),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+
+                    with st.expander("特徴量ごとの距離への寄与を見る"):
+                        contribution_display = feature_contributions.copy()
+                        contribution_display["類似局面の日付"] = contribution_display[
+                            "類似局面の日付"
+                        ].dt.strftime("%Y-%m-%d")
+                        contribution_display["距離への寄与率"] = contribution_display[
+                            "距離への寄与率"
+                        ].map(lambda value: f"{value:.1f}%")
+                        st.dataframe(
+                            contribution_display,
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+                    st.caption(
+                        "数値特徴量は各時点までの観測だけで標準化し、マクロ評価は月末判定を翌月から利用します。"
+                        "公表時刻の完全な再現ではありません。類似度は距離を0〜100へ換算した相対指標です。"
+                        "将来リターンは類似度に使用していません。サンプルは近接日を除いた過去の実績であり、"
+                        "将来予測や投資助言ではありません。"
+                    )
         st.caption("CPI前年比・失業率・FF金利の直近3か月変化と、米国債10年−2年の利回り差による参考判定です。投資判断や将来の市場動向を保証するものではありません。")
     except Exception as error:
         st.warning(f"米国マクロ局面を判定できませんでした: {error}")
