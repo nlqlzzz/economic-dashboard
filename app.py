@@ -30,6 +30,10 @@ from macro_regime import (
     build_us_macro_trends,
 )
 from market_alerts import detect_market_moves
+from market_stress import (
+    STRESS_INPUT_INDICATORS,
+    calculate_market_stress,
+)
 from market_summary import build_market_summary
 from theme_view import (
     THEME_DEFINITIONS,
@@ -716,6 +720,101 @@ with event_tab:
                 )
 
 with analysis_tab:
+    st.subheader("Market Stress Score")
+    st.caption(
+        "VIX、株価変動、株価下落、米10年金利変化、為替変動を過去5年分布と比較し、"
+        "市場の不安定さを0〜100で機械的に要約します。"
+    )
+    if st.button(
+        "ストレススコアを計算",
+        key="run_market_stress_score",
+        width="stretch",
+    ):
+        st.session_state["show_market_stress_score"] = True
+
+    if st.session_state.get("show_market_stress_score", False):
+        stress_history_start = (
+            pd.Timestamp.today().normalize()
+            - pd.DateOffset(years=5)
+            - pd.DateOffset(days=120)
+        ).date()
+        stress_series: dict[str, pd.Series] = {}
+        stress_load_errors: list[str] = []
+        stress_fallbacks: list[str] = []
+        with st.spinner("市場ストレスの構成項目を確認しています…"):
+            for stress_indicator_name in STRESS_INPUT_INDICATORS:
+                try:
+                    stress_indicator_series = load_indicator_data(
+                        INDICATORS[stress_indicator_name], str(stress_history_start)
+                    )
+                    stress_series[stress_indicator_name] = stress_indicator_series
+                    if stress_indicator_series.attrs.get("is_fallback"):
+                        stress_fallbacks.append(
+                            f"{stress_indicator_name}: "
+                            f"{stress_indicator_series.attrs['fallback_label']}"
+                            f"（{stress_indicator_series.attrs['ticker']}）"
+                        )
+                except Exception as stress_error:
+                    stress_load_errors.append(
+                        f"{stress_indicator_name}: {stress_error}"
+                    )
+
+        for stress_load_error in stress_load_errors:
+            st.warning(f"Market Stress Scoreでは取得できない系列があります: {stress_load_error}")
+        for stress_fallback in stress_fallbacks:
+            st.warning(f"Market Stress Scoreでは代替系列を使用します: {stress_fallback}")
+
+        stress_result = calculate_market_stress(stress_series)
+        stress_score = stress_result["score"]
+        if stress_score is None:
+            st.warning(
+                "Market Stress Scoreを算出できません。"
+                f"利用可能な構成項目は{stress_result['coverage']}/"
+                f"{stress_result['total_components']}です。3項目以上が必要です。"
+            )
+        else:
+            stress_metrics = st.columns(3)
+            stress_metrics[0].metric("ストレススコア", f"{stress_score:.0f} / 100")
+            stress_metrics[1].metric("状態", stress_result["level"])
+            stress_metrics[2].metric(
+                "データカバレッジ",
+                f"{stress_result['coverage']} / {stress_result['total_components']}",
+            )
+            st.progress(float(stress_score) / 100)
+
+            stress_components = stress_result["components"].copy()
+            stress_components["実測値"] = stress_components.apply(
+                lambda row: f"{row['実測値']:.2f}{row['単位']}", axis=1
+            )
+            stress_components["過去5年percentile"] = stress_components[
+                "過去5年percentile"
+            ].map(lambda value: f"{value:.1f}%")
+            stress_components["ウェイト"] = stress_components["ウェイト"].map(
+                lambda value: f"{value:.1f}%"
+            )
+            stress_components["スコア寄与"] = stress_components["スコア寄与"].map(
+                lambda value: f"{value:.1f}pt"
+            )
+            stress_components["基準日"] = stress_components["基準日"].dt.strftime(
+                "%Y-%m-%d"
+            )
+            st.dataframe(
+                stress_components.drop(columns=["単位"]),
+                hide_index=True,
+                width="stretch",
+            )
+
+        if stress_result["unavailable"]:
+            with st.expander("利用できなかった構成項目"):
+                for unavailable_component in stress_result["unavailable"]:
+                    st.write(f"- {unavailable_component}")
+        st.caption(
+            "各項目の最新値が過去5年分布のどの位置にあるかをpercentile化し、利用可能項目を"
+            "等ウェイトで集計します。欠損時はウェイトを再配分します。サンプル数は各項目の"
+            "percentile計算に使った過去観測数です。高スコアは市場の不安定さを示す参考値であり、"
+            "将来予測、売買シグナル、投資助言ではありません。"
+        )
+
     st.subheader("相関変化検知")
     st.caption(
         "代表的な市場間関係について、現在の20日・60日相関を過去時点と5年間の分布に照らします。"
