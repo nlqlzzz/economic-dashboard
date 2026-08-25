@@ -25,6 +25,12 @@ from macro_regime import (
 )
 from market_alerts import detect_market_moves
 from market_summary import build_market_summary
+from theme_view import (
+    THEME_DEFINITIONS,
+    build_theme_snapshot,
+    relative_strength,
+    upcoming_theme_events,
+)
 from regime_returns import (
     REGIME_ASSET_DEFINITIONS,
     analyze_regime_forward_performance,
@@ -1155,3 +1161,190 @@ try:
     st.caption("CPI前年比・失業率・FF金利の直近3か月変化と、米国債10年−2年の利回り差による参考判定です。投資判断や将来の市場動向を保証するものではありません。")
 except Exception as error:
     st.warning(f"米国マクロ局面を判定できませんでした: {error}")
+
+st.subheader("投資テーマ別ビュー（参考）")
+st.caption(
+    "既存の指標・急変検知・相関・マクロ局面・イベントを、投資テーマ単位でまとめ直します。"
+)
+selected_theme_name = st.selectbox(
+    "確認するテーマ", list(THEME_DEFINITIONS), key="investment_theme"
+)
+selected_theme = THEME_DEFINITIONS[selected_theme_name]
+st.info(f"**{selected_theme_name}**  \n{selected_theme['description']}")
+theme_history_start = (
+    pd.Timestamp.today().normalize() - pd.DateOffset(years=5) - pd.DateOffset(days=120)
+).date()
+try:
+    theme_series: dict[str, pd.Series] = {}
+    theme_errors: list[str] = []
+    with st.spinner(f"{selected_theme_name}テーマのデータをまとめています…"):
+        for theme_indicator_name in selected_theme["indicators"]:
+            try:
+                theme_series[theme_indicator_name] = load_indicator_data(
+                    INDICATORS[theme_indicator_name], str(theme_history_start)
+                )
+            except Exception as theme_error:
+                theme_errors.append(f"{theme_indicator_name}: {theme_error}")
+    for theme_error in theme_errors:
+        st.warning(f"テーマ別ビューでは {theme_error}")
+
+    theme_snapshot = build_theme_snapshot(theme_series, INDICATORS)
+    if theme_snapshot.empty:
+        st.info("テーマの最新状況を表示できるデータがありません。")
+    else:
+        theme_snapshot_display = theme_snapshot.copy()
+        theme_snapshot_display["最新値"] = theme_snapshot_display.apply(
+            lambda row: f"{row['最新値']:,.2f} {row['単位']}", axis=1
+        )
+        for change_column in ("直前変化", "1か月変化"):
+            theme_snapshot_display[change_column] = theme_snapshot_display.apply(
+                lambda row: (
+                    "—"
+                    if pd.isna(row[change_column])
+                    else f"{row[change_column]:+.2f}{row['変化単位']}"
+                ),
+                axis=1,
+            )
+        theme_snapshot_display["データ日"] = theme_snapshot_display["データ日"].dt.strftime(
+            "%Y-%m-%d"
+        )
+        st.markdown("##### テーマの現在地")
+        st.dataframe(
+            theme_snapshot_display[
+                ["指標", "最新値", "直前変化", "1か月変化", "データ日"]
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        price_theme_series = {
+            name: series
+            for name, series in theme_series.items()
+            if INDICATORS[name]["category"] != "金利"
+        }
+        theme_move_alerts = detect_market_moves(price_theme_series, alert_thresholds)
+        if theme_move_alerts.empty:
+            st.caption("設定中の急変検知基準を超えるテーマ指標はありません。")
+        else:
+            strongest_theme_alert = theme_move_alerts.iloc[0]
+            st.warning(
+                f"急変: {strongest_theme_alert['指標']}が{strongest_theme_alert['期間']}で"
+                f"{strongest_theme_alert['騰落率']:+.2f}%（{strongest_theme_alert['方向']}）"
+            )
+
+        relative_left, relative_right = selected_theme["relative_pair"]
+        if relative_left in theme_series and relative_right in theme_series:
+            relative_values, relative_month_change = relative_strength(
+                theme_series[relative_left], theme_series[relative_right]
+            )
+            if not relative_values.empty:
+                relative_values = relative_values.loc[
+                    relative_values.index
+                    >= pd.Timestamp.today().normalize() - pd.DateOffset(months=6)
+                ]
+                st.markdown("##### 相対強度")
+                relative_figure = go.Figure(
+                    go.Scatter(
+                        x=relative_values.index,
+                        y=relative_values,
+                        mode="lines",
+                        name=f"{relative_left} / {relative_right}",
+                        line=dict(width=2),
+                        hovertemplate="日付: %{x|%Y-%m-%d}<br>相対強度: %{y:.2f}<extra></extra>",
+                    )
+                )
+                relative_figure.add_hline(
+                    y=100, line_width=1, line_dash="dot", line_color="gray"
+                )
+                relative_figure.update_layout(
+                    height=280,
+                    margin=dict(l=20, r=20, t=20, b=40),
+                    yaxis_title="取得開始日=100",
+                    xaxis_title="日付",
+                )
+                st.plotly_chart(relative_figure, use_container_width=True)
+                relative_direction = (
+                    "優位"
+                    if relative_month_change is not None and relative_month_change > 0
+                    else "劣位"
+                    if relative_month_change is not None and relative_month_change < 0
+                    else "横ばい"
+                )
+                st.caption(
+                    f"{relative_left}は{relative_right}に対して直近1か月で"
+                    f"{relative_direction}"
+                    + (
+                        ""
+                        if relative_month_change is None
+                        else f"（相対強度 {relative_month_change:+.2f}%）"
+                    )
+                )
+
+        correlation_left, correlation_right = selected_theme["correlation_pair"]
+        if correlation_left in theme_series and correlation_right in theme_series:
+            theme_correlation_methods = {
+                name: (
+                    "change" if INDICATORS[name]["category"] == "金利" else "return"
+                )
+                for name in (correlation_left, correlation_right)
+            }
+            theme_daily_frame, _ = build_daily_change_frame(
+                {
+                    correlation_left: theme_series[correlation_left],
+                    correlation_right: theme_series[correlation_right],
+                },
+                theme_correlation_methods,
+            )
+            theme_correlation_summary = correlation_change_summary(
+                theme_daily_frame[correlation_left], theme_daily_frame[correlation_right]
+            )
+            if not theme_correlation_summary.empty:
+                st.markdown("##### 市場間関係")
+                correlation_columns = st.columns(len(theme_correlation_summary))
+                for column, (_, correlation_row) in zip(
+                    correlation_columns, theme_correlation_summary.iterrows()
+                ):
+                    column.metric(
+                        f"{correlation_row['期間']}相関",
+                        f"{correlation_row['現在']:+.2f}",
+                        delta=f"1か月前比 {correlation_row['21日差']:+.2f}",
+                        help=(
+                            f"{correlation_left} × {correlation_right}｜"
+                            f"過去5年percentile {correlation_row['percentile']:.0f}%"
+                        ),
+                    )
+                for theme_correlation_alert in correlation_change_alerts(
+                    theme_correlation_summary
+                ):
+                    st.warning(f"相関変化シグナル: {theme_correlation_alert}")
+
+        if "macro_regime" in locals():
+            st.markdown("##### マクロ局面")
+            st.write(f"**{macro_regime['regime']}** — {macro_regime['description']}")
+
+        theme_events = upcoming_theme_events(
+            build_us_economic_events(),
+            selected_theme["event_types"],
+            pd.Timestamp.today().normalize(),
+        )
+        st.markdown("##### 関連イベント")
+        if theme_events.empty:
+            st.caption("収録期間内に今後の関連イベントはありません。")
+        else:
+            theme_event_display = theme_events.copy()
+            theme_event_display["日本時間"] = theme_event_display["datetime"].dt.strftime(
+                "%Y-%m-%d %H:%M"
+            )
+            st.dataframe(
+                theme_event_display[["日本時間", "event", "importance"]].rename(
+                    columns={"event": "イベント", "importance": "重要度"}
+                ),
+                hide_index=True,
+                use_container_width=True,
+            )
+    st.caption(
+        "テーマ別ビューは関連データを一か所に整理する機能です。相対強度・相関・急変は"
+        "将来予測や売買推奨ではなく、投資判断の材料として表示しています。"
+    )
+except Exception as error:
+    st.warning(f"投資テーマ別ビューを表示できませんでした: {error}")
