@@ -73,8 +73,9 @@ st.markdown(
             padding-top: 1rem;
         }
         [data-testid="stAppViewContainer"] h1 {
-            font-size: 1.7rem;
+            font-size: clamp(1.35rem, 6.2vw, 1.7rem);
             line-height: 1.25;
+            overflow-wrap: anywhere;
         }
         [data-testid="stAppViewContainer"] h2 {
             font-size: 1.35rem;
@@ -577,7 +578,7 @@ with market_tab:
         st.dataframe(table.sort_index(ascending=False), use_container_width=True)
 
 with event_tab:
-    st.subheader("米国経済イベントカレンダー（参考）")
+    st.subheader("米国経済イベントカレンダー")
     calendar_months = st.radio(
         "表示期間",
         ["今後3か月", "今後6か月", "収録分すべて"],
@@ -621,7 +622,7 @@ with event_tab:
     except Exception as error:
         st.warning(f"経済イベントカレンダーを表示できませんでした: {error}")
 
-    st.subheader("イベント前後分析（参考）")
+    st.subheader("イベント前後分析")
     st.caption(
         "重要イベントの公表直前の終値を基準に、当日から20営業日後までの市場反応を集計します。"
     )
@@ -714,7 +715,7 @@ with event_tab:
                 )
 
 with analysis_tab:
-    st.subheader("相関変化検知（参考）")
+    st.subheader("相関変化検知")
     st.caption(
         "代表的な市場間関係について、現在の20日・60日相関を過去時点と5年間の分布に照らします。"
         "価格は日次騰落率、金利・金利差は日次変化幅を使用します。"
@@ -835,7 +836,7 @@ with analysis_tab:
         "相関の変化は市場構造の変化を探す判断材料です。因果関係や将来の値動きを示すものではありません。"
     )
 
-    st.subheader("相関分析（参考）")
+    st.subheader("相関分析")
     st.caption(
         "価格系は騰落率、金利・金利差・マクロ指標はポイント変化で比較します。"
         "マクロ指標を含む場合は月次、それ以外は週次です。初期値は、上で選択している指標です。"
@@ -1050,7 +1051,7 @@ with analysis_tab:
 
             st.caption("相関係数は-1から+1です。相関は因果関係や将来の値動きを示すものではなく、景気・インフレ・リスク回避など市場環境によって変化します。")
 
-    st.subheader("米国マクロ局面（参考）")
+    st.subheader("米国マクロ局面")
     try:
         regime_start_date = (pd.Timestamp.today().normalize() - pd.DateOffset(years=15)).date()
         with st.spinner("マクロ指標を確認しています…"):
@@ -1457,7 +1458,7 @@ with analysis_tab:
         st.warning(f"米国マクロ局面を判定できませんでした: {error}")
 
 with theme_tab:
-    st.subheader("投資テーマ別ビュー（参考）")
+    st.subheader("投資テーマ別ビュー")
     st.caption(
         "既存の指標・急変検知・相関・マクロ局面・イベントを、投資テーマ単位でまとめ直します。"
     )
