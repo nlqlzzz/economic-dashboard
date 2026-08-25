@@ -552,13 +552,25 @@ with market_tab:
     )
 
     with st.expander("データ更新状況"):
+        data_status_frame = build_data_status_frame(
+            series_to_plot, INDICATORS, DATA_SOURCE_LABELS
+        )
+        stale_data = data_status_frame[data_status_frame["鮮度"] == "⚠ 要確認"]
+        if not stale_data.empty:
+            st.warning(
+                "想定より更新が遅い系列があります: "
+                + "、".join(stale_data["指標"].astype(str))
+                + "。データ元の公表状況や取得状態を確認してください。"
+            )
         st.dataframe(
-            build_data_status_frame(series_to_plot, INDICATORS, DATA_SOURCE_LABELS),
+            data_status_frame,
             hide_index=True,
             use_container_width=True,
         )
         st.caption(
             "データ最終日は系列の最新観測日、取得確認日時はキャッシュ内データを取得した日本時間です。"
+            "営業日次は週末を除く2営業日、暦日次は2日、月次は通常の公表ラグを含む62日を超えると要確認になります。"
+            "単発の休場日では警告しにくい猶予を設けています。"
         )
 
     with st.expander("データ一覧"):

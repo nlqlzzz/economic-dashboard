@@ -14,6 +14,7 @@ INDICATORS = {
         "yoy": True,
         "correlation_method": "monthly_change",
         "category": "米国経済指標",
+        "update_frequency": "monthly",
     },
     "FF金利": {
         "source": "fred",
@@ -22,6 +23,7 @@ INDICATORS = {
         "yoy": False,
         "correlation_method": "monthly_change",
         "category": "米国経済指標",
+        "update_frequency": "monthly",
     },
     "失業率": {
         "source": "fred",
@@ -30,6 +32,7 @@ INDICATORS = {
         "yoy": False,
         "correlation_method": "monthly_change",
         "category": "米国経済指標",
+        "update_frequency": "monthly",
     },
     "USD/JPY": {
         "source": "yfinance",
@@ -129,6 +132,7 @@ INDICATORS = {
         "unit": "円",
         "yoy": False,
         "category": "マーケット",
+        "update_frequency": "calendar_daily",
     },
     "EUR/JPY": {
         "source": "yfinance",
