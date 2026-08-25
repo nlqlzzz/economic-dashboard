@@ -95,9 +95,23 @@ INDICATORS = {
         "yoy": False,
         "category": "マーケット",
     },
-    "Gold先物": {
+    "金先物": {
         "source": "yfinance",
         "ticker": "GC=F",
+        "unit": "米ドル",
+        "yoy": False,
+        "category": "マーケット",
+    },
+    "銀先物": {
+        "source": "yfinance",
+        "ticker": "SI=F",
+        "unit": "米ドル",
+        "yoy": False,
+        "category": "マーケット",
+    },
+    "プラチナ先物": {
+        "source": "yfinance",
+        "ticker": "PL=F",
         "unit": "米ドル",
         "yoy": False,
         "category": "マーケット",

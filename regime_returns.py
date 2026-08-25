@@ -12,7 +12,7 @@ REGIME_ASSET_DEFINITIONS = {
     "日経平均": ("日経平均株価", "return"),
     "TOPIX（1306 ETF近似）": ("TOPIX連動ETF（1306）", "return"),
     "USD/JPY": ("USD/JPY", "return"),
-    "Gold": ("Gold先物", "return"),
+    "Gold": ("金先物", "return"),
     "米10年金利": ("UST 10Y", "change_bp"),
 }
 
