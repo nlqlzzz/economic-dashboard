@@ -103,7 +103,7 @@ st.markdown(
 st.title("市場ダッシュボード")
 st.caption("FRED と Yahoo Finance の公開データを表示します。")
 
-WATCHLISTS: dict[str, set[str]] = {
+DISPLAY_SETS: dict[str, set[str]] = {
     "半導体": {
         "SOX指数",
         "キオクシア（285A）",
@@ -170,17 +170,6 @@ WATCHLISTS: dict[str, set[str]] = {
         "日米金利差 10Y（米国−日本）",
         "日米金利差 30Y（米国−日本）",
     },
-    "注目銘柄": {
-        "キオクシア（285A）",
-        "東京エレクトロン（8035）",
-        "レーザーテック（6920）",
-        "ディスコ（6146）",
-        "アドバンテスト（6857）",
-        "三菱商事（8058）",
-        "三菱UFJ（8306）",
-        "三菱重工（7011）",
-        "任天堂（7974）",
-    },
 }
 
 WATCHLIST_STORAGE_KEY = "economic_dashboard_watchlists_v1"
@@ -217,10 +206,16 @@ with st.sidebar:
 
     selected_names: list[str] = []
     st.caption("表示セット")
-    for watchlist_name, watchlist_indicators in WATCHLISTS.items():
-        if st.button(watchlist_name, use_container_width=True, key=f"watchlist_{watchlist_name}"):
+    for display_set_name, display_set_indicators in DISPLAY_SETS.items():
+        if st.button(
+            display_set_name,
+            use_container_width=True,
+            key=f"display_set_{display_set_name}",
+        ):
             for name in INDICATORS:
-                st.session_state[f"show_{name}_default_v2"] = name in watchlist_indicators
+                st.session_state[f"show_{name}_default_v2"] = (
+                    name in display_set_indicators
+                )
 
     browser_storage = LocalStorage(key="watchlist_browser_storage")
     saved_watchlists = load_watchlists(
@@ -256,12 +251,16 @@ with st.sidebar:
         for name in INDICATORS:
             st.session_state[f"show_{name}_default_v2"] = False
 
-    category_order = ["米国経済指標", "マーケット", "米国セクター", "注目銘柄", "為替", "金利"]
+    category_order = ["米国経済指標", "マーケット", "米国セクター", "個別株", "為替", "金利"]
     available_categories = dict.fromkeys(info["category"] for info in INDICATORS.values())
     categories = [category for category in category_order if category in available_categories]
     categories.extend(category for category in available_categories if category not in categories)
     for category in categories:
         with st.expander(category, expanded=category == "マーケット"):
+            if category == "個別株":
+                st.caption(
+                    "銘柄を選択し、下の「現在の選択を保存・更新」から任意のウォッチリストとして保存できます。"
+                )
             for name, info in INDICATORS.items():
                 is_default = name in {"日経平均株価", "S&P 500指数"}
                 if info["category"] == category and st.checkbox(name, value=is_default, key=f"show_{name}_default_v2"):
