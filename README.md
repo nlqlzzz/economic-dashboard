@@ -20,6 +20,8 @@ python -m unittest -v
 python -m py_compile app.py
 ```
 
+main向けPRとmainへのpushでは、GitHub Actionsの`CI` workflowがPython 3.12で依存関係確認、全単体テスト、全Pythonファイルの構文検査を実行します。CIは外部データ取得やSecretsを使用せず、APIレスポンスはテスト内の固定データ・モックで検証します。
+
 ## Streamlit Community Cloudのデプロイ設定
 
 このアプリのデプロイ座標は次のとおりです。
