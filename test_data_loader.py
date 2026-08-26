@@ -8,6 +8,7 @@ from data_loader import (
     DataUnavailableError,
     IndicatorDataError,
     RetryFailure,
+    _parse_meti_iip_workbook,
     _load_with_retry,
     load_indicator_data,
 )
@@ -83,6 +84,48 @@ class IndicatorFallbackTest(unittest.TestCase):
         self.assertEqual(attempts, 2)
         mock_sleep.assert_called_once()
 
+
+class MetiIipParserTest(unittest.TestCase):
+    @patch("data_loader.pd.read_excel")
+    def test_extracts_semiconductor_row_from_all_four_sheets(
+        self, mock_read_excel
+    ) -> None:
+        frame = pd.DataFrame(
+            [
+                [None, None, None, None, None],
+                [None, None, None, "time-code-1", "time-code-2"],
+                ["品目番号", "品目名称", "ウェイト", 202501.0, 202502.0],
+                [1105000000, "電子部品・デバイス工業", 500, 101.2, 102.4],
+            ]
+        )
+        mock_read_excel.return_value = frame
+
+        parsed = _parse_meti_iip_workbook(b"workbook")
+
+        self.assertEqual(set(parsed), {"生産", "出荷", "在庫", "在庫率"})
+        for series in parsed.values():
+            self.assertEqual(
+                list(series.index),
+                list(pd.to_datetime(["2025-01-01", "2025-02-01"])),
+            )
+            self.assertEqual(list(series), [101.2, 102.4])
+
+    @patch("data_loader.pd.read_excel")
+    def test_rejects_changed_industry_code(self, mock_read_excel) -> None:
+        mock_read_excel.return_value = pd.DataFrame(
+            [
+                [None, None, None, None],
+                [None, None, None, "time-code"],
+                ["品目番号", "品目名称", "ウェイト", "202501"],
+                [9999999999, "別の業種", 500, 101.2],
+            ]
+        )
+
+        with self.assertRaisesRegex(DataUnavailableError, "1105000000"):
+            _parse_meti_iip_workbook(b"workbook")
+
+
+class RetryBehaviorTest(unittest.TestCase):
     @patch("data_loader.time.sleep")
     def test_does_not_retry_permanent_error(self, mock_sleep) -> None:
         loader = unittest.mock.Mock(side_effect=ValueError("invalid ticker"))

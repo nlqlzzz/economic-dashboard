@@ -8,7 +8,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 from streamlit_local_storage import LocalStorage
 
-from data_loader import load_data, load_indicator_data
+from data_loader import load_data, load_indicator_data, load_meti_semiconductor_iip
 from data_status import build_data_status_frame
 from economic_calendar import (
     OFFICIAL_SCHEDULE_URLS,
@@ -23,6 +23,10 @@ from event_analysis import (
     analyze_event_reactions,
 )
 from indicators import DATA_SOURCE_LABELS, INDICATORS
+from japan_semiconductor_cycle import (
+    semiconductor_iip_trends,
+    summarize_semiconductor_iip,
+)
 from macro_regime import (
     assess_us_macro_regime,
     build_macro_focus_guide,
@@ -1666,6 +1670,105 @@ with theme_tab:
                     theme_errors.append(f"{theme_indicator_name}: {theme_error}")
         for theme_error in theme_errors:
             st.warning(f"テーマ別ビューでは {theme_error}")
+
+        if selected_theme_name == "半導体":
+            st.markdown("#### Japan Fundamental Cycle")
+            st.caption(
+                "経済産業省の電子部品・デバイス工業から、生産・出荷・在庫・在庫率を"
+                "組み合わせて日本の半導体実体サイクルを確認します。"
+            )
+            try:
+                with st.spinner("電デバの鉱工業指数を確認しています…"):
+                    semiconductor_iip = load_meti_semiconductor_iip()
+                    semiconductor_iip_result = summarize_semiconductor_iip(
+                        semiconductor_iip
+                    )
+                st.info(semiconductor_iip_result["assessment"])
+
+                iip_summary = semiconductor_iip_result["summary"].copy()
+                if iip_summary.empty:
+                    st.warning("電デバ4指標の要約に必要なデータがありません。")
+                else:
+                    iip_summary["最新値"] = iip_summary["最新値"].map(
+                        lambda value: f"{value:.1f}"
+                    )
+                    for change_column in ("前月比", "前年同月比"):
+                        iip_summary[change_column] = iip_summary[change_column].map(
+                            lambda value: (
+                                "—" if pd.isna(value) else f"{value:+.1f}%"
+                            )
+                        )
+                    iip_summary["3か月移動平均"] = iip_summary[
+                        "3か月移動平均"
+                    ].map(lambda value: "—" if pd.isna(value) else f"{value:.1f}")
+                    iip_summary["対象年月"] = iip_summary["対象年月"].dt.strftime(
+                        "%Y-%m"
+                    )
+                    st.dataframe(
+                        iip_summary[
+                            [
+                                "指標",
+                                "最新値",
+                                "前月比",
+                                "前年同月比",
+                                "3か月移動平均",
+                                "対象年月",
+                            ]
+                        ],
+                        hide_index=True,
+                        width="stretch",
+                    )
+
+                for unavailable_iip in semiconductor_iip_result["unavailable"]:
+                    st.warning(f"Japan Fundamental Cycleでは {unavailable_iip}")
+
+                iip_trends = semiconductor_iip_trends(semiconductor_iip)
+                if not iip_trends.empty:
+                    with st.expander("生産・出荷・在庫・在庫率の推移を見る"):
+                        iip_figure = go.Figure()
+                        for iip_name in iip_trends:
+                            iip_figure.add_trace(
+                                go.Scatter(
+                                    x=iip_trends.index,
+                                    y=iip_trends[iip_name],
+                                    mode="lines",
+                                    name=iip_name,
+                                    line=dict(width=3 if iip_name == "在庫率" else 2),
+                                    hovertemplate=(
+                                        f"{iip_name}<br>対象月: %{{x|%Y-%m}}"
+                                        "<br>指数: %{y:.1f}<extra></extra>"
+                                    ),
+                                )
+                            )
+                        iip_figure.update_layout(
+                            height=360,
+                            margin=dict(l=20, r=20, t=20, b=40),
+                            xaxis_title="対象月",
+                            yaxis_title="2020年=100",
+                            hovermode="x unified",
+                            legend=dict(orientation="h", y=-0.22),
+                        )
+                        st.plotly_chart(iip_figure, width="stretch")
+
+                source_url = semiconductor_iip.attrs["source_url"]
+                file_updated_at = semiconductor_iip.attrs.get("file_updated_at")
+                file_updated_text = (
+                    "不明"
+                    if file_updated_at is None
+                    else f"{file_updated_at:%Y-%m-%d %H:%M} JST"
+                )
+                st.caption(
+                    "最新値・前月比・3か月移動平均は季節調整済指数、前年比は原指数です。"
+                    "在庫率だけで強弱を判定せず、生産・出荷・在庫と合わせて表示します。"
+                    "掲載値は最新ファイルのため、確報・年間補正で過去値が改定されます。"
+                    f" ファイル更新日時: {file_updated_text}。"
+                )
+                st.markdown(f"データ出所: [経済産業省 鉱工業指数（2020年基準）]({source_url})")
+            except Exception as iip_error:
+                st.warning(
+                    "Japan Fundamental Cycleの電デバ統計を取得できませんでした。"
+                    f"市場データは引き続き表示します: {iip_error}"
+                )
 
         theme_snapshot = build_theme_snapshot(theme_series, INDICATORS)
         if theme_snapshot.empty:
