@@ -24,6 +24,7 @@ from event_analysis import (
 )
 from indicators import DATA_SOURCE_LABELS, INDICATORS
 from japan_semiconductor_cycle import (
+    build_inventory_cycle_map,
     semiconductor_iip_trends,
     summarize_semiconductor_iip,
 )
@@ -1684,6 +1685,105 @@ with theme_tab:
                         semiconductor_iip
                     )
                 st.info(semiconductor_iip_result["assessment"])
+
+                inventory_cycle = build_inventory_cycle_map(semiconductor_iip)
+                st.markdown("##### 半導体在庫循環マップ")
+                if inventory_cycle.empty:
+                    st.warning(
+                        "出荷・在庫の前年比がそろわず、在庫循環マップを表示できません。"
+                    )
+                else:
+                    cycle_limit = max(
+                        5.0,
+                        float(
+                            inventory_cycle[["出荷前年比", "在庫前年比"]]
+                            .abs()
+                            .max()
+                            .max()
+                        )
+                        * 1.2,
+                    )
+                    point_count = len(inventory_cycle)
+                    marker_colors = [
+                        f"rgba(31, 119, 180, {0.18 + 0.72 * index / max(point_count - 1, 1):.2f})"
+                        for index in range(point_count)
+                    ]
+                    marker_sizes = [7] * max(point_count - 1, 0) + [14]
+                    marker_symbols = ["circle"] * max(point_count - 1, 0) + [
+                        "diamond"
+                    ]
+                    cycle_figure = go.Figure()
+                    cycle_figure.add_trace(
+                        go.Scatter(
+                            x=inventory_cycle["出荷前年比"],
+                            y=inventory_cycle["在庫前年比"],
+                            mode="lines+markers",
+                            line=dict(color="rgba(31, 119, 180, 0.45)", width=2),
+                            marker=dict(
+                                color=marker_colors,
+                                size=marker_sizes,
+                                symbol=marker_symbols,
+                                line=dict(color="white", width=1),
+                            ),
+                            customdata=inventory_cycle[["対象年月", "局面候補"]],
+                            hovertemplate=(
+                                "対象月: %{customdata[0]|%Y-%m}"
+                                "<br>出荷前年比: %{x:+.1f}%"
+                                "<br>在庫前年比: %{y:+.1f}%"
+                                "<br>局面候補: %{customdata[1]}<extra></extra>"
+                            ),
+                            showlegend=False,
+                        )
+                    )
+                    quadrant_styles = (
+                        (0, cycle_limit, -cycle_limit, 0, "需給改善方向", "#2ca02c"),
+                        (0, cycle_limit, 0, cycle_limit, "需要拡大・在庫積み増し", "#1f77b4"),
+                        (-cycle_limit, 0, 0, cycle_limit, "需要減速・在庫過剰リスク", "#d62728"),
+                        (-cycle_limit, 0, -cycle_limit, 0, "減産・在庫調整", "#ff7f0e"),
+                    )
+                    for x0, x1, y0, y1, label, color in quadrant_styles:
+                        cycle_figure.add_shape(
+                            type="rect",
+                            x0=x0,
+                            x1=x1,
+                            y0=y0,
+                            y1=y1,
+                            fillcolor=color,
+                            opacity=0.06,
+                            line_width=0,
+                            layer="below",
+                        )
+                        cycle_figure.add_annotation(
+                            x=(x0 + x1) / 2,
+                            y=(y0 + y1) / 2,
+                            text=label,
+                            showarrow=False,
+                            font=dict(size=11, color=color),
+                            opacity=0.8,
+                        )
+                    cycle_figure.add_hline(y=0, line_color="gray", line_width=1)
+                    cycle_figure.add_vline(x=0, line_color="gray", line_width=1)
+                    cycle_figure.update_layout(
+                        height=430,
+                        margin=dict(l=20, r=20, t=20, b=40),
+                        xaxis=dict(
+                            title="出荷前年比（%）",
+                            range=[-cycle_limit, cycle_limit],
+                            zeroline=False,
+                        ),
+                        yaxis=dict(
+                            title="在庫前年比（%）",
+                            range=[-cycle_limit, cycle_limit],
+                            zeroline=False,
+                        ),
+                    )
+                    st.plotly_chart(cycle_figure, width="stretch")
+                    latest_cycle = inventory_cycle.iloc[-1]
+                    st.caption(
+                        f"最新の{latest_cycle['対象年月']:%Y-%m}は「{latest_cycle['局面候補']}」の"
+                        "候補です。線は古い月から新しい月への推移、菱形は最新月を示します。"
+                        f" 表示観測数: {point_count}か月。"
+                    )
 
                 iip_summary = semiconductor_iip_result["summary"].copy()
                 if iip_summary.empty:

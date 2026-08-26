@@ -4,6 +4,12 @@ import pandas as pd
 
 
 IIP_DISPLAY_ORDER = ("在庫率", "出荷", "生産", "在庫")
+INVENTORY_CYCLE_PHASES = {
+    (True, False): "需給改善方向",
+    (True, True): "需要拡大・在庫積み増し",
+    (False, True): "需要減速・在庫過剰リスク",
+    (False, False): "減産・在庫調整",
+}
 
 
 def summarize_semiconductor_iip(frame: pd.DataFrame) -> dict[str, object]:
@@ -81,6 +87,49 @@ def semiconductor_iip_trends(
     return trends.rename(columns=lambda name: name.removesuffix("_季節調整済"))
 
 
+def build_inventory_cycle_map(
+    frame: pd.DataFrame, months: int = 24
+) -> pd.DataFrame:
+    """出荷・在庫の原指数前年比による在庫循環の軌跡を返す。"""
+    required = ("出荷_原指数", "在庫_原指数")
+    if months < 1 or any(column not in frame for column in required):
+        return pd.DataFrame()
+
+    shipment = _clean_series(frame[required[0]])
+    inventory = _clean_series(frame[required[1]])
+    common_dates = shipment.index.intersection(inventory.index).sort_values()
+    rows: list[dict[str, object]] = []
+    for target_date in common_dates:
+        year_ago_date = target_date - pd.DateOffset(months=12)
+        if (
+            year_ago_date not in shipment.index
+            or year_ago_date not in inventory.index
+            or shipment.loc[year_ago_date] == 0
+            or inventory.loc[year_ago_date] == 0
+        ):
+            continue
+        shipment_yoy = float(
+            (shipment.loc[target_date] / shipment.loc[year_ago_date] - 1) * 100
+        )
+        inventory_yoy = float(
+            (inventory.loc[target_date] / inventory.loc[year_ago_date] - 1) * 100
+        )
+        rows.append(
+            {
+                "対象年月": target_date,
+                "出荷前年比": shipment_yoy,
+                "在庫前年比": inventory_yoy,
+                "局面候補": classify_inventory_cycle(shipment_yoy, inventory_yoy),
+            }
+        )
+    return pd.DataFrame(rows).tail(months).reset_index(drop=True)
+
+
+def classify_inventory_cycle(shipment_yoy: float, inventory_yoy: float) -> str:
+    """出荷・在庫前年比の符号から説明用の局面候補を返す。"""
+    return INVENTORY_CYCLE_PHASES[(shipment_yoy >= 0, inventory_yoy >= 0)]
+
+
 def _cycle_assessment(summary: pd.DataFrame) -> str:
     values = {
         row["指標"]: row
@@ -94,11 +143,12 @@ def _cycle_assessment(summary: pd.DataFrame) -> str:
 
     shipment_yoy = float(shipment["前年同月比"])
     inventory_yoy = float(inventory["前年同月比"])
-    if shipment_yoy >= 0 and inventory_yoy < 0:
+    phase = classify_inventory_cycle(shipment_yoy, inventory_yoy)
+    if phase == "需給改善方向":
         base = "出荷が前年を上回る一方で在庫は減少しており、需給改善方向の候補です。"
-    elif shipment_yoy >= 0 and inventory_yoy >= 0:
+    elif phase == "需要拡大・在庫積み増し":
         base = "出荷と在庫がともに増えており、需要拡大と在庫積み増しが並行する局面候補です。"
-    elif shipment_yoy < 0 <= inventory_yoy:
+    elif phase == "需要減速・在庫過剰リスク":
         base = "出荷が前年を下回る一方で在庫は増えており、在庫過剰リスクに注意が必要です。"
     else:
         base = "出荷と在庫がともに減っており、減産・在庫調整局面の候補です。"
