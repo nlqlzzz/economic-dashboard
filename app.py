@@ -20,6 +20,7 @@ from economic_calendar import (
     build_us_economic_events,
     calendar_display_frame,
     latest_event_results,
+    schedule_coverage_text,
 )
 from event_analysis import (
     EVENT_ASSET_DEFINITIONS,
@@ -656,7 +657,7 @@ with event_tab:
         else:
             st.dataframe(calendar_table, hide_index=True, use_container_width=True)
         st.caption(
-            "日程はBLS（2026年12月まで）とFRB（2027年12月まで）の公表情報を日本時間へ変換。"
+            f"日程は{schedule_coverage_text()}の公表情報を日本時間へ変換。"
             "予想値は公式データにないため表示しません。直近結果・前回値はFREDの最新系列値です。"
         )
         st.markdown(
