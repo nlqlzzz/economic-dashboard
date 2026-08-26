@@ -82,6 +82,14 @@ Reboot後はCloudログで依存関係のインストールと`app.py`の起動�
 - CloudでSecretsが必要になった場合は、アプリの`Settings` → `Secrets`へ登録します。
 - エラー報告やログ共有の前に、トークン、Cookie、URLパラメータなどの機密情報が含まれていないか確認します。
 
+日本半導体テーマの「半導体製造装置受注」には、e-Stat APIのアプリケーションIDが必要です。ローカルでは`.streamlit/secrets.toml`、Community CloudではアプリのSecretsへ次の形式で登録します。
+
+```toml
+ESTAT_APP_ID = "取得したアプリケーションID"
+```
+
+環境変数`ESTAT_APP_ID`でも設定できます。値そのものはGit、画面、エラーログへ記録しないでください。
+
 ## 公式ドキュメント
 
 - [Deploy your app on Community Cloud](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy)

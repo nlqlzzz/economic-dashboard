@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from io import StringIO
 from io import BytesIO
+import os
 import time
 from typing import Callable, TypeVar
 
@@ -35,6 +36,11 @@ METI_IIP_SHEETS = {
     "在庫": "在庫",
     "在庫率": "在庫率",
 }
+ESTAT_API_URL = "https://api.e-stat.go.jp/rest/3.0/app/json/getStatsData"
+ESTAT_MACHINERY_ORDERS_TABLE_ID = "0003355226"
+ESTAT_MACHINERY_ORDERS_SOURCE_URL = (
+    "https://www.e-stat.go.jp/dbview?sid=0003355226"
+)
 LoadResult = TypeVar("LoadResult")
 
 
@@ -188,6 +194,42 @@ def load_meti_semiconductor_iip() -> pd.DataFrame:
     return frame
 
 
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def load_semiconductor_machinery_orders() -> pd.Series:
+    """e-Statから半導体製造装置の機械受注額（原系列・月次）を返す。"""
+    app_id = _get_estat_app_id()
+    started_at = time.perf_counter()
+    try:
+        (series, released_at), attempts = _load_with_retry(
+            lambda: _download_estat_semiconductor_machinery_orders(app_id)
+        )
+    except RetryFailure as retry_failure:
+        error = retry_failure.error
+        raise SourceLoadError(
+            LoadFailure(
+                source="e-stat",
+                ticker=ESTAT_MACHINERY_ORDERS_TABLE_ID,
+                error_type=_classify_error(error),
+                detail=str(error),
+                attempts=retry_failure.attempts,
+            )
+        ) from error
+    series.attrs.update(
+        {
+            "source": "e-Stat 機械受注統計調査（内閣府）",
+            "source_url": ESTAT_MACHINERY_ORDERS_SOURCE_URL,
+            "table_id": ESTAT_MACHINERY_ORDERS_TABLE_ID,
+            "unit": "百万円",
+            "seasonal_adjustment": "原系列",
+            "fetched_at": pd.Timestamp.now(tz="Asia/Tokyo"),
+            "released_at": released_at,
+            "fetch_attempts": attempts,
+            "fetch_duration_seconds": time.perf_counter() - started_at,
+        }
+    )
+    return series
+
+
 def _load_with_retry(
     loader: Callable[[], LoadResult],
     maximum_attempts: int = MAX_FETCH_ATTEMPTS,
@@ -236,6 +278,128 @@ def _download_meti_semiconductor_iip() -> tuple[pd.DataFrame, pd.Timestamp | Non
     ]
     updated_values = [value for value in updated_values if value is not None]
     return frame, max(updated_values) if updated_values else None
+
+
+def _get_estat_app_id() -> str:
+    app_id = os.getenv("ESTAT_APP_ID", "").strip()
+    if not app_id:
+        try:
+            app_id = str(st.secrets.get("ESTAT_APP_ID", "")).strip()
+        except Exception:
+            app_id = ""
+    if not app_id:
+        raise DataUnavailableError(
+            "e-Stat APIの利用にはStreamlit Secretsまたは環境変数の"
+            "ESTAT_APP_ID設定が必要です。"
+        )
+    return app_id
+
+
+def _download_estat_semiconductor_machinery_orders(
+    app_id: str,
+) -> tuple[pd.Series, pd.Timestamp | None]:
+    response = requests.get(
+        ESTAT_API_URL,
+        params={
+            "appId": app_id,
+            "statsDataId": ESTAT_MACHINERY_ORDERS_TABLE_ID,
+            "metaGetFlg": "Y",
+            "cntGetFlg": "N",
+        },
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        raise requests.HTTPError(f"e-Stat API HTTP {response.status_code}")
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise requests.RequestException("e-Stat APIがJSON以外を返しました。") from error
+    return _parse_estat_semiconductor_orders(payload)
+
+
+def _parse_estat_semiconductor_orders(
+    payload: dict[str, object],
+) -> tuple[pd.Series, pd.Timestamp | None]:
+    root = payload.get("GET_STATS_DATA", {})
+    result = root.get("RESULT", {}) if isinstance(root, dict) else {}
+    status = str(result.get("STATUS", "")) if isinstance(result, dict) else ""
+    if status != "0":
+        raise DataUnavailableError(
+            f"e-Stat APIエラー（status={status or 'unknown'}）。"
+        )
+    statistical_data = root.get("STATISTICAL_DATA", {})
+    if not isinstance(statistical_data, dict):
+        raise DataUnavailableError("e-Stat APIの統計データ形式が不正です。")
+
+    class_inf = statistical_data.get("CLASS_INF", {})
+    class_objects = class_inf.get("CLASS_OBJ", []) if isinstance(class_inf, dict) else []
+    if isinstance(class_objects, dict):
+        class_objects = [class_objects]
+    machine_dimension = _find_estat_dimension(class_objects, "機種分類")
+    time_dimension = _find_estat_dimension(class_objects, "時間軸")
+    machine_classes = machine_dimension.get("CLASS", [])
+    time_classes = time_dimension.get("CLASS", [])
+    if isinstance(machine_classes, dict):
+        machine_classes = [machine_classes]
+    if isinstance(time_classes, dict):
+        time_classes = [time_classes]
+    machine_matches = [
+        item
+        for item in machine_classes
+        if isinstance(item, dict)
+        and str(item.get("@name", "")).endswith("半導体製造装置")
+    ]
+    if len(machine_matches) != 1:
+        raise DataUnavailableError(
+            "e-Statで半導体製造装置の系列を一意に特定できません。"
+        )
+    machine_code = str(machine_matches[0].get("@code", ""))
+    machine_dimension_id = str(machine_dimension.get("@id", ""))
+    time_dimension_id = str(time_dimension.get("@id", ""))
+    time_names = {
+        str(item.get("@code", "")): str(item.get("@name", ""))
+        for item in time_classes
+        if isinstance(item, dict)
+    }
+
+    data_inf = statistical_data.get("DATA_INF", {})
+    values = data_inf.get("VALUE", []) if isinstance(data_inf, dict) else []
+    if isinstance(values, dict):
+        values = [values]
+    observations: dict[pd.Timestamp, float] = {}
+    for item in values:
+        if not isinstance(item, dict) or str(item.get(f"@{machine_dimension_id}")) != machine_code:
+            continue
+        time_code = str(item.get(f"@{time_dimension_id}", ""))
+        target_date = pd.to_datetime(
+            time_names.get(time_code, ""), format="%Y年%m月", errors="coerce"
+        )
+        value = pd.to_numeric(item.get("$"), errors="coerce")
+        if pd.notna(target_date) and pd.notna(value):
+            observations[pd.Timestamp(target_date)] = float(value)
+    if not observations:
+        raise DataUnavailableError("e-Statの半導体製造装置受注系列が空です。")
+    series = pd.Series(observations, name="半導体製造装置受注", dtype=float).sort_index()
+
+    table_inf = statistical_data.get("TABLE_INF", {})
+    updated_date = table_inf.get("UPDATED_DATE") if isinstance(table_inf, dict) else None
+    released_at = pd.to_datetime(updated_date, errors="coerce")
+    return series, None if pd.isna(released_at) else pd.Timestamp(released_at)
+
+
+def _find_estat_dimension(
+    class_objects: list[object], name_fragment: str
+) -> dict[str, object]:
+    matches = [
+        item
+        for item in class_objects
+        if isinstance(item, dict) and name_fragment in str(item.get("@name", ""))
+    ]
+    if len(matches) != 1:
+        raise DataUnavailableError(
+            f"e-Statメタ情報の{name_fragment}を一意に特定できません。"
+        )
+    return matches[0]
 
 
 def _parse_meti_iip_workbook(content: bytes) -> dict[str, pd.Series]:

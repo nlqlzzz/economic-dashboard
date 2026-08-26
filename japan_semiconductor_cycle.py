@@ -130,6 +130,52 @@ def classify_inventory_cycle(shipment_yoy: float, inventory_yoy: float) -> str:
     return INVENTORY_CYCLE_PHASES[(shipment_yoy >= 0, inventory_yoy >= 0)]
 
 
+def summarize_semiconductor_machinery_orders(series: pd.Series) -> dict[str, object]:
+    """半導体製造装置受注の単月値と平滑化したトレンド指標を返す。"""
+    orders = _clean_series(series)
+    if orders.empty:
+        return {}
+    latest_date = orders.index[-1]
+    latest_value = float(orders.iloc[-1])
+    three_month_average = orders.rolling(3, min_periods=3).mean()
+    latest_three_month_average = three_month_average.iloc[-1]
+    year_ago_date = latest_date - pd.DateOffset(months=12)
+    three_month_year_ago_date = year_ago_date
+    six_month_ago_date = latest_date - pd.DateOffset(months=6)
+
+    return {
+        "最新値": latest_value,
+        "前月比": _exact_change(orders, latest_date, latest_date - pd.DateOffset(months=1)),
+        "前年同月比": _exact_change(orders, latest_date, year_ago_date),
+        "3か月移動平均": (
+            None if pd.isna(latest_three_month_average) else float(latest_three_month_average)
+        ),
+        "3か月移動平均前年比": _exact_change(
+            three_month_average, latest_date, three_month_year_ago_date
+        ),
+        "6か月モメンタム": _exact_change(
+            three_month_average, latest_date, six_month_ago_date
+        ),
+        "対象年月": latest_date,
+        "観測数": len(orders),
+    }
+
+
+def semiconductor_machinery_order_trends(
+    series: pd.Series, months: int = 36
+) -> pd.DataFrame:
+    """表示用に単月受注と3か月移動平均を直近指定月数へ絞る。"""
+    orders = _clean_series(series)
+    if months < 1 or orders.empty:
+        return pd.DataFrame()
+    return pd.DataFrame(
+        {
+            "単月受注": orders,
+            "3か月移動平均": orders.rolling(3, min_periods=3).mean(),
+        }
+    ).tail(months)
+
+
 def _cycle_assessment(summary: pd.DataFrame) -> str:
     values = {
         row["指標"]: row
@@ -170,3 +216,17 @@ def _clean_series(series: pd.Series) -> pd.Series:
         .to_timestamp()
     )
     return clean[~clean.index.duplicated(keep="last")].sort_index()
+
+
+def _exact_change(
+    series: pd.Series, current_date: pd.Timestamp, comparison_date: pd.Timestamp
+) -> float | None:
+    if (
+        current_date not in series.index
+        or comparison_date not in series.index
+        or pd.isna(series.loc[current_date])
+        or pd.isna(series.loc[comparison_date])
+        or series.loc[comparison_date] == 0
+    ):
+        return None
+    return float((series.loc[current_date] / series.loc[comparison_date] - 1) * 100)
