@@ -1,4 +1,5 @@
 import unittest
+from copy import deepcopy
 
 import pandas as pd
 
@@ -6,6 +7,9 @@ from economic_calendar import (
     build_us_economic_events,
     calendar_display_frame,
     latest_event_results,
+    load_event_schedule,
+    schedule_coverage_text,
+    validate_event_schedule,
 )
 
 
@@ -19,6 +23,46 @@ class EconomicCalendarTest(unittest.TestCase):
 
         self.assertEqual(september_cpi["datetime"].hour, 21)
         self.assertEqual(str(september_cpi["datetime"].tzinfo), "Asia/Tokyo")
+
+        december_cpi = events[
+            (events["event"] == "米CPI")
+            & (events["datetime"].dt.strftime("%Y-%m-%d") == "2026-12-10")
+        ].iloc[0]
+        self.assertEqual(december_cpi["datetime"].hour, 22)
+        self.assertEqual(december_cpi["datetime"].minute, 30)
+
+    def test_loads_valid_schedule_and_formats_coverage(self) -> None:
+        schedule = load_event_schedule()
+
+        self.assertEqual(schedule["schema_version"], 1)
+        self.assertEqual(
+            schedule_coverage_text(schedule),
+            "BLS（2026-12まで）、FRB（2027-12まで）",
+        )
+
+    def test_rejects_duplicate_events(self) -> None:
+        schedule = deepcopy(load_event_schedule())
+        schedule["events"].append(deepcopy(schedule["events"][-1]))
+
+        with self.assertRaisesRegex(ValueError, "重複"):
+            validate_event_schedule(schedule)
+
+    def test_rejects_events_out_of_order(self) -> None:
+        schedule = deepcopy(load_event_schedule())
+        schedule["events"][0], schedule["events"][1] = (
+            schedule["events"][1],
+            schedule["events"][0],
+        )
+
+        with self.assertRaisesRegex(ValueError, "昇順"):
+            validate_event_schedule(schedule)
+
+    def test_rejects_coverage_that_does_not_match_latest_event(self) -> None:
+        schedule = deepcopy(load_event_schedule())
+        schedule["sources"]["BLS"]["coverage_end"] = "2026-12-31"
+
+        with self.assertRaisesRegex(ValueError, "最終収録日"):
+            validate_event_schedule(schedule)
 
     def test_formats_latest_and_previous_results(self) -> None:
         dates = pd.date_range("2025-01-01", periods=15, freq="MS")

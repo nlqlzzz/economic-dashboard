@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "sources": {
+    "BLS": {
+      "url": "https://www.bls.gov/schedule/2026/home.htm",
+      "timezone": "America/New_York",
+      "release_time": "08:30",
+      "coverage_end": "2026-12-10"
+    },
+    "FRB": {
+      "url": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+      "timezone": "America/New_York",
+      "release_time": "14:00",
+      "coverage_end": "2027-12-08"
+    }
+  },
+  "events": [
+    {"date": "2026-09-04", "event_type": "employment", "source": "BLS"},
+    {"date": "2026-09-11", "event_type": "cpi", "source": "BLS"},
+    {"date": "2026-09-16", "event_type": "fomc", "source": "FRB"},
+    {"date": "2026-10-02", "event_type": "employment", "source": "BLS"},
+    {"date": "2026-10-14", "event_type": "cpi", "source": "BLS"},
+    {"date": "2026-10-28", "event_type": "fomc", "source": "FRB"},
+    {"date": "2026-11-06", "event_type": "employment", "source": "BLS"},
+    {"date": "2026-11-10", "event_type": "cpi", "source": "BLS"},
+    {"date": "2026-12-04", "event_type": "employment", "source": "BLS"},
+    {"date": "2026-12-09", "event_type": "fomc", "source": "FRB"},
+    {"date": "2026-12-10", "event_type": "cpi", "source": "BLS"},
+    {"date": "2027-01-27", "event_type": "fomc", "source": "FRB"},
+    {"date": "2027-03-17", "event_type": "fomc", "source": "FRB"},
+    {"date": "2027-04-28", "event_type": "fomc", "source": "FRB"},
+    {"date": "2027-06-09", "event_type": "fomc", "source": "FRB"},
+    {"date": "2027-07-28", "event_type": "fomc", "source": "FRB"},
+    {"date": "2027-09-15", "event_type": "fomc", "source": "FRB"},
+    {"date": "2027-10-27", "event_type": "fomc", "source": "FRB"},
+    {"date": "2027-12-08", "event_type": "fomc", "source": "FRB"}
+  ]
+}
