@@ -8,7 +8,9 @@ from data_loader import (
     DataUnavailableError,
     IndicatorDataError,
     RetryFailure,
+    _download_estat_semiconductor_machinery_orders,
     _parse_meti_iip_workbook,
+    _parse_estat_semiconductor_orders,
     _load_with_retry,
     load_indicator_data,
 )
@@ -123,6 +125,90 @@ class MetiIipParserTest(unittest.TestCase):
 
         with self.assertRaisesRegex(DataUnavailableError, "1105000000"):
             _parse_meti_iip_workbook(b"workbook")
+
+
+class EstatMachineryOrdersParserTest(unittest.TestCase):
+    def test_extracts_direct_semiconductor_equipment_series(self) -> None:
+        payload = {
+            "GET_STATS_DATA": {
+                "RESULT": {"STATUS": 0},
+                "STATISTICAL_DATA": {
+                    "TABLE_INF": {"UPDATED_DATE": "2026-08-19"},
+                    "CLASS_INF": {
+                        "CLASS_OBJ": [
+                            {
+                                "@id": "cat01",
+                                "@name": "機種分類(大中分類)",
+                                "CLASS": [
+                                    {"@code": "100", "@name": "電子計算機等"},
+                                    {
+                                        "@code": "101",
+                                        "@name": "電子・通信機械_半導体製造装置",
+                                    },
+                                ],
+                            },
+                            {
+                                "@id": "time",
+                                "@name": "時間軸(月次)",
+                                "CLASS": [
+                                    {"@code": "202605", "@name": "2026年5月"},
+                                    {"@code": "202606", "@name": "2026年6月"},
+                                ],
+                            },
+                        ]
+                    },
+                    "DATA_INF": {
+                        "VALUE": [
+                            {"@cat01": "100", "@time": "202606", "$": "999"},
+                            {"@cat01": "101", "@time": "202605", "$": "120"},
+                            {"@cat01": "101", "@time": "202606", "$": "150"},
+                        ]
+                    },
+                },
+            }
+        }
+
+        series, released_at = _parse_estat_semiconductor_orders(payload)
+
+        self.assertEqual(list(series), [120.0, 150.0])
+        self.assertEqual(series.index[-1], pd.Timestamp("2026-06-01"))
+        self.assertEqual(released_at, pd.Timestamp("2026-08-19"))
+
+    def test_rejects_missing_direct_series(self) -> None:
+        payload = {
+            "GET_STATS_DATA": {
+                "RESULT": {"STATUS": 0},
+                "STATISTICAL_DATA": {
+                    "CLASS_INF": {
+                        "CLASS_OBJ": [
+                            {
+                                "@id": "cat01",
+                                "@name": "機種分類",
+                                "CLASS": {"@code": "100", "@name": "電子計算機等"},
+                            },
+                            {
+                                "@id": "time",
+                                "@name": "時間軸",
+                                "CLASS": {"@code": "202606", "@name": "2026年6月"},
+                            },
+                        ]
+                    },
+                    "DATA_INF": {"VALUE": []},
+                },
+            }
+        }
+
+        with self.assertRaisesRegex(DataUnavailableError, "半導体製造装置"):
+            _parse_estat_semiconductor_orders(payload)
+
+    @patch("data_loader.requests.get")
+    def test_http_error_does_not_expose_app_id(self, mock_get) -> None:
+        mock_get.return_value.status_code = 403
+
+        with self.assertRaises(requests.HTTPError) as context:
+            _download_estat_semiconductor_machinery_orders("private-app-id")
+
+        self.assertNotIn("private-app-id", str(context.exception))
 
 
 class RetryBehaviorTest(unittest.TestCase):

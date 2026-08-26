@@ -5,7 +5,9 @@ import pandas as pd
 from japan_semiconductor_cycle import (
     build_inventory_cycle_map,
     classify_inventory_cycle,
+    semiconductor_machinery_order_trends,
     semiconductor_iip_trends,
+    summarize_semiconductor_machinery_orders,
     summarize_semiconductor_iip,
 )
 
@@ -81,6 +83,31 @@ class JapanSemiconductorCycleTest(unittest.TestCase):
         self.assertEqual(classify_inventory_cycle(1, 1), "需要拡大・在庫積み増し")
         self.assertEqual(classify_inventory_cycle(-1, 1), "需要減速・在庫過剰リスク")
         self.assertEqual(classify_inventory_cycle(-1, -1), "減産・在庫調整")
+
+    def test_summarizes_smoothed_machinery_order_trend(self) -> None:
+        dates = pd.date_range("2024-01-01", periods=18, freq="MS")
+        orders = pd.Series(range(100, 118), index=dates, dtype=float)
+
+        summary = summarize_semiconductor_machinery_orders(orders)
+
+        self.assertEqual(summary["最新値"], 117.0)
+        self.assertEqual(summary["3か月移動平均"], 116.0)
+        self.assertAlmostEqual(summary["前年同月比"], (117 / 105 - 1) * 100)
+        self.assertAlmostEqual(
+            summary["3か月移動平均前年比"], (116 / 104 - 1) * 100
+        )
+        self.assertAlmostEqual(summary["6か月モメンタム"], (116 / 110 - 1) * 100)
+        self.assertEqual(summary["観測数"], 18)
+
+    def test_builds_machinery_order_trends(self) -> None:
+        dates = pd.date_range("2025-01-01", periods=8, freq="MS")
+        orders = pd.Series(range(100, 108), index=dates, dtype=float)
+
+        trends = semiconductor_machinery_order_trends(orders, months=4)
+
+        self.assertEqual(len(trends), 4)
+        self.assertEqual(list(trends), ["単月受注", "3か月移動平均"])
+        self.assertEqual(trends.iloc[-1]["3か月移動平均"], 106.0)
 
 
 if __name__ == "__main__":

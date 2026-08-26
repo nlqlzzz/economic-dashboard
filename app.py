@@ -8,7 +8,12 @@ import streamlit as st
 from plotly.subplots import make_subplots
 from streamlit_local_storage import LocalStorage
 
-from data_loader import load_data, load_indicator_data, load_meti_semiconductor_iip
+from data_loader import (
+    load_data,
+    load_indicator_data,
+    load_meti_semiconductor_iip,
+    load_semiconductor_machinery_orders,
+)
 from data_status import build_data_status_frame
 from economic_calendar import (
     OFFICIAL_SCHEDULE_URLS,
@@ -25,7 +30,9 @@ from event_analysis import (
 from indicators import DATA_SOURCE_LABELS, INDICATORS
 from japan_semiconductor_cycle import (
     build_inventory_cycle_map,
+    semiconductor_machinery_order_trends,
     semiconductor_iip_trends,
+    summarize_semiconductor_machinery_orders,
     summarize_semiconductor_iip,
 )
 from macro_regime import (
@@ -1868,6 +1875,111 @@ with theme_tab:
                 st.warning(
                     "Japan Fundamental Cycleの電デバ統計を取得できませんでした。"
                     f"市場データは引き続き表示します: {iip_error}"
+                )
+
+            st.markdown("##### 半導体製造装置受注")
+            st.caption(
+                "設備投資の振れをならして見るため、内閣府の半導体製造装置単体の"
+                "受注額（原系列）は3か月移動平均を中心に確認します。"
+            )
+            try:
+                with st.spinner("半導体製造装置受注を確認しています…"):
+                    machinery_orders = load_semiconductor_machinery_orders()
+                    machinery_summary = summarize_semiconductor_machinery_orders(
+                        machinery_orders
+                    )
+                if not machinery_summary:
+                    st.warning("半導体製造装置受注の有効な観測値がありません。")
+                else:
+                    machinery_summary_frame = pd.DataFrame(
+                        [
+                            {
+                                "最新値": f"{machinery_summary['最新値']:,.0f} 百万円",
+                                "前月比": (
+                                    "—"
+                                    if machinery_summary["前月比"] is None
+                                    else f"{machinery_summary['前月比']:+.1f}%"
+                                ),
+                                "前年同月比": (
+                                    "—"
+                                    if machinery_summary["前年同月比"] is None
+                                    else f"{machinery_summary['前年同月比']:+.1f}%"
+                                ),
+                                "3か月移動平均": (
+                                    "—"
+                                    if machinery_summary["3か月移動平均"] is None
+                                    else f"{machinery_summary['3か月移動平均']:,.0f} 百万円"
+                                ),
+                                "3か月平均前年比": (
+                                    "—"
+                                    if machinery_summary["3か月移動平均前年比"] is None
+                                    else f"{machinery_summary['3か月移動平均前年比']:+.1f}%"
+                                ),
+                                "6か月モメンタム": (
+                                    "—"
+                                    if machinery_summary["6か月モメンタム"] is None
+                                    else f"{machinery_summary['6か月モメンタム']:+.1f}%"
+                                ),
+                                "対象年月": f"{machinery_summary['対象年月']:%Y-%m}",
+                            }
+                        ]
+                    )
+                    st.dataframe(
+                        machinery_summary_frame,
+                        hide_index=True,
+                        width="stretch",
+                    )
+                    machinery_trends = semiconductor_machinery_order_trends(
+                        machinery_orders
+                    )
+                    if not machinery_trends.empty:
+                        with st.expander("半導体製造装置受注の推移を見る"):
+                            machinery_figure = go.Figure()
+                            machinery_figure.add_trace(
+                                go.Bar(
+                                    x=machinery_trends.index,
+                                    y=machinery_trends["単月受注"],
+                                    name="単月受注",
+                                    marker_color="rgba(31, 119, 180, 0.35)",
+                                )
+                            )
+                            machinery_figure.add_trace(
+                                go.Scatter(
+                                    x=machinery_trends.index,
+                                    y=machinery_trends["3か月移動平均"],
+                                    mode="lines",
+                                    name="3か月移動平均",
+                                    line=dict(color="#1f77b4", width=3),
+                                )
+                            )
+                            machinery_figure.update_layout(
+                                height=360,
+                                margin=dict(l=20, r=20, t=20, b=40),
+                                xaxis_title="対象月",
+                                yaxis_title="受注額（百万円）",
+                                hovermode="x unified",
+                                legend=dict(orientation="h", y=-0.22),
+                            )
+                            st.plotly_chart(machinery_figure, width="stretch")
+                    source_url = machinery_orders.attrs["source_url"]
+                    released_at = machinery_orders.attrs.get("released_at")
+                    release_text = (
+                        "不明"
+                        if released_at is None
+                        else f"{released_at:%Y-%m-%d}"
+                    )
+                    st.caption(
+                        f"原系列のため季節性を含みます。表示観測数: "
+                        f"{machinery_summary['観測数']}か月。データ更新日: {release_text}。"
+                        "単月値だけで設備投資局面を判定せず、3か月平均と前年比を併記します。"
+                    )
+                    st.markdown(
+                        f"データ出所: [e-Stat 機械受注統計調査（内閣府）]({source_url})"
+                    )
+            except Exception as machinery_error:
+                st.warning(
+                    "半導体製造装置受注を表示できません。電デバ統計と市場データは"
+                    f"引き続き表示します: {machinery_error}"
                 )
 
         theme_snapshot = build_theme_snapshot(theme_series, INDICATORS)
