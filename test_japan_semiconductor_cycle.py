@@ -3,6 +3,8 @@ import unittest
 import pandas as pd
 
 from japan_semiconductor_cycle import (
+    build_inventory_cycle_map,
+    classify_inventory_cycle,
     semiconductor_iip_trends,
     summarize_semiconductor_iip,
 )
@@ -57,6 +59,28 @@ class JapanSemiconductorCycleTest(unittest.TestCase):
         self.assertEqual(list(trends), ["在庫率", "出荷", "生産", "在庫"])
         self.assertEqual(len(trends), 6)
         self.assertEqual(trends.index[-1], pd.Timestamp("2025-03-01"))
+
+    def test_builds_inventory_cycle_from_exact_year_ago_values(self) -> None:
+        cycle = build_inventory_cycle_map(self.frame, months=2)
+
+        self.assertEqual(len(cycle), 2)
+        self.assertEqual(cycle.iloc[-1]["対象年月"], pd.Timestamp("2025-03-01"))
+        self.assertAlmostEqual(cycle.iloc[-1]["出荷前年比"], (109 / 91 - 1) * 100)
+        self.assertAlmostEqual(cycle.iloc[-1]["在庫前年比"], (96 / 108 - 1) * 100)
+        self.assertEqual(cycle.iloc[-1]["局面候補"], "需給改善方向")
+
+    def test_inventory_cycle_skips_month_without_exact_year_ago(self) -> None:
+        missing_year_ago = self.frame.drop(index=pd.Timestamp("2024-03-01"))
+
+        cycle = build_inventory_cycle_map(missing_year_ago)
+
+        self.assertNotIn(pd.Timestamp("2025-03-01"), set(cycle["対象年月"]))
+
+    def test_classifies_all_inventory_cycle_quadrants(self) -> None:
+        self.assertEqual(classify_inventory_cycle(1, -1), "需給改善方向")
+        self.assertEqual(classify_inventory_cycle(1, 1), "需要拡大・在庫積み増し")
+        self.assertEqual(classify_inventory_cycle(-1, 1), "需要減速・在庫過剰リスク")
+        self.assertEqual(classify_inventory_cycle(-1, -1), "減産・在庫調整")
 
 
 if __name__ == "__main__":
