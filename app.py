@@ -53,6 +53,7 @@ from theme_view import (
     THEME_DEFINITIONS,
     build_theme_snapshot,
     relative_strength,
+    theme_relationship_pairs,
     upcoming_theme_events,
 )
 from regime_returns import (
@@ -1985,6 +1986,7 @@ with theme_tab:
                     f"引き続き表示します: {machinery_error}"
                 )
 
+        st.markdown("#### Market")
         theme_snapshot = build_theme_snapshot(theme_series, INDICATORS)
         if theme_snapshot.empty:
             st.info("テーマの最新状況を表示できるデータがありません。")
@@ -2029,7 +2031,23 @@ with theme_tab:
                     f"{strongest_theme_alert['騰落率']:+.2f}%（{strongest_theme_alert['方向']}）"
                 )
 
-            relative_left, relative_right = selected_theme["relative_pair"]
+            st.markdown("#### Relative / Correlation")
+            relative_pairs = theme_relationship_pairs(selected_theme, "relative")
+            if len(relative_pairs) > 1:
+                relative_pair_labels = {
+                    f"{left} / {right}": (left, right)
+                    for left, right in relative_pairs
+                }
+                selected_relative_label = st.selectbox(
+                    "相対強度の比較",
+                    list(relative_pair_labels),
+                    key=f"theme_relative_pair_{selected_theme_name}",
+                )
+                relative_left, relative_right = relative_pair_labels[
+                    selected_relative_label
+                ]
+            else:
+                relative_left, relative_right = relative_pairs[0]
             if relative_left in theme_series and relative_right in theme_series:
                 relative_values, relative_month_change = relative_strength(
                     theme_series[relative_left], theme_series[relative_right]
@@ -2077,7 +2095,22 @@ with theme_tab:
                         )
                     )
 
-            correlation_left, correlation_right = selected_theme["correlation_pair"]
+            correlation_pairs = theme_relationship_pairs(selected_theme, "correlation")
+            if len(correlation_pairs) > 1:
+                correlation_pair_labels = {
+                    f"{left} × {right}": (left, right)
+                    for left, right in correlation_pairs
+                }
+                selected_correlation_label = st.selectbox(
+                    "相関の比較",
+                    list(correlation_pair_labels),
+                    key=f"theme_correlation_pair_{selected_theme_name}",
+                )
+                correlation_left, correlation_right = correlation_pair_labels[
+                    selected_correlation_label
+                ]
+            else:
+                correlation_left, correlation_right = correlation_pairs[0]
             if correlation_left in theme_series and correlation_right in theme_series:
                 theme_correlation_methods = {
                     name: (

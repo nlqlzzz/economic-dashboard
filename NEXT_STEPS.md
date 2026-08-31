@@ -22,11 +22,9 @@
 
 目的: 日本の半導体について、市場価格、実体経済、在庫循環、設備投資、過去の株価反応を一つの分析導線へつなげる。
 
-1. 半導体テーマ統合
-   - 日本半導体株、SOX、金利、為替、実体統計をMarket / Relative・Correlation / Japan Fundamental Cycleに整理する。
-2. 過去検証
+1. 過去検証
    - 公表日基準でリード・ラグ相関と条件付き将来リターンを検証し、サンプル数と低標本警告を表示する。
-3. Japan Semiconductor Cycle Score
+2. Japan Semiconductor Cycle Score
    - 上記の過去検証までの有用性を確認した場合に限り、各要素の寄与を開示する説明可能な0〜100スコアを検討する。
 
 共通原則:

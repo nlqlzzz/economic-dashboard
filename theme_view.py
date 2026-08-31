@@ -7,10 +7,39 @@ from utils import change_from_previous, latest_value, percent_change_since
 
 THEME_DEFINITIONS = {
     "半導体": {
-        "description": "半導体株の強弱を、米国株・金利・市場心理とまとめて確認します。",
-        "indicators": ["SOX指数", "NASDAQ総合指数", "S&P 500指数", "UST 10Y", "VIX指数"],
+        "description": "日米半導体株の値動きと、日本の実体経済・在庫循環・設備投資をまとめて確認します。",
+        "indicators": [
+            "SOX指数",
+            "NASDAQ総合指数",
+            "S&P 500指数",
+            "東京エレクトロン（8035）",
+            "アドバンテスト（6857）",
+            "ディスコ（6146）",
+            "キオクシア（285A）",
+            "USD/JPY",
+            "UST 10Y",
+            "VIX指数",
+        ],
         "relative_pair": ("SOX指数", "S&P 500指数"),
+        "relative_pairs": [
+            ("SOX指数", "S&P 500指数"),
+            ("東京エレクトロン（8035）", "SOX指数"),
+            ("アドバンテスト（6857）", "SOX指数"),
+            ("ディスコ（6146）", "SOX指数"),
+            ("キオクシア（285A）", "SOX指数"),
+        ],
         "correlation_pair": ("SOX指数", "UST 10Y"),
+        "correlation_pairs": [
+            ("SOX指数", "UST 10Y"),
+            ("東京エレクトロン（8035）", "SOX指数"),
+            ("アドバンテスト（6857）", "SOX指数"),
+            ("ディスコ（6146）", "SOX指数"),
+            ("キオクシア（285A）", "SOX指数"),
+            ("東京エレクトロン（8035）", "USD/JPY"),
+            ("アドバンテスト（6857）", "USD/JPY"),
+            ("ディスコ（6146）", "USD/JPY"),
+            ("キオクシア（285A）", "USD/JPY"),
+        ],
         "event_types": ["cpi", "fomc"],
     },
     "米国株": {
@@ -42,6 +71,25 @@ THEME_DEFINITIONS = {
         "event_types": ["cpi", "fomc"],
     },
 }
+
+
+def theme_relationship_pairs(
+    theme: dict[str, object], relationship: str
+) -> list[tuple[str, str]]:
+    """テーマの比較候補を返し、従来の単一ペア定義も受け付ける。"""
+    configured = theme.get(f"{relationship}_pairs")
+    if isinstance(configured, list):
+        pairs = [
+            (str(pair[0]), str(pair[1]))
+            for pair in configured
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+        ]
+        if pairs:
+            return pairs
+    fallback = theme.get(f"{relationship}_pair")
+    if isinstance(fallback, (list, tuple)) and len(fallback) == 2:
+        return [(str(fallback[0]), str(fallback[1]))]
+    return []
 
 
 def build_theme_snapshot(
