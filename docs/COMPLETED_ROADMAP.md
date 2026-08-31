@@ -32,6 +32,8 @@
    - 出荷前年比×在庫前年比の24か月軌跡と最新局面候補を表示。
 4. 半導体製造装置受注
    - 内閣府の「電子計算機等」（半導体製造装置を含む）を補助系列として使用し、単月値より3か月平均と前年比を重視する構成を実装。
+5. 半導体テーマ統合
+   - 日本半導体株、SOX、NASDAQ、米10年金利、VIX、USD/JPYと実体統計をMarket / Relative・Correlation / Japan Fundamental Cycleとして同じテーマ内に整理。
 
 ## Technical Roadmap
 

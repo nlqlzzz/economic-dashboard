@@ -6,6 +6,7 @@ from theme_view import (
     THEME_DEFINITIONS,
     build_theme_snapshot,
     relative_strength,
+    theme_relationship_pairs,
     upcoming_theme_events,
 )
 
@@ -16,6 +17,36 @@ class ThemeViewTest(unittest.TestCase):
         for theme in THEME_DEFINITIONS.values():
             self.assertGreaterEqual(len(theme["indicators"]), 5)
             self.assertEqual(len(theme["correlation_pair"]), 2)
+
+    def test_semiconductor_theme_connects_japan_stocks_and_market_factors(self):
+        semiconductor = THEME_DEFINITIONS["半導体"]
+
+        self.assertTrue(
+            {
+                "東京エレクトロン（8035）",
+                "アドバンテスト（6857）",
+                "ディスコ（6146）",
+                "キオクシア（285A）",
+                "SOX指数",
+                "USD/JPY",
+                "UST 10Y",
+                "VIX指数",
+            }.issubset(semiconductor["indicators"])
+        )
+        self.assertIn(
+            ("東京エレクトロン（8035）", "SOX指数"),
+            theme_relationship_pairs(semiconductor, "relative"),
+        )
+        self.assertIn(
+            ("東京エレクトロン（8035）", "USD/JPY"),
+            theme_relationship_pairs(semiconductor, "correlation"),
+        )
+
+    def test_relationship_pairs_keep_single_pair_themes_compatible(self):
+        self.assertEqual(
+            theme_relationship_pairs(THEME_DEFINITIONS["米国株"], "relative"),
+            [("NASDAQ総合指数", "S&P 500指数")],
+        )
 
     def test_snapshot_uses_returns_for_prices_and_basis_points_for_yields(self):
         index = pd.date_range("2025-01-01", periods=25, freq="B")
