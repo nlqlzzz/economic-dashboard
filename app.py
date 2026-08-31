@@ -30,7 +30,10 @@ from event_analysis import (
 )
 from indicators import DATA_SOURCE_LABELS, INDICATORS
 from japan_semiconductor_cycle import (
+    analyze_release_aware_lead_lag,
+    analyze_semiconductor_condition_returns,
     build_inventory_cycle_map,
+    build_semiconductor_backtest_signals,
     electronic_computer_order_trends,
     semiconductor_iip_trends,
     summarize_electronic_computer_orders,
@@ -1682,6 +1685,8 @@ with theme_tab:
             st.warning(f"テーマ別ビューでは {theme_error}")
 
         if selected_theme_name == "半導体":
+            semiconductor_iip = pd.DataFrame()
+            machinery_orders = pd.Series(dtype=float)
             st.markdown("#### Japan Fundamental Cycle")
             st.caption(
                 "経済産業省の電子部品・デバイス工業から、生産・出荷・在庫・在庫率を"
@@ -1985,6 +1990,113 @@ with theme_tab:
                     "電子計算機等受注を表示できません。電デバ統計と市場データは"
                     f"引き続き表示します: {machinery_error}"
                 )
+
+            st.markdown("##### 過去の株価反応を検証")
+            st.caption(
+                "経済統計の対象月ではなく、市場参加者が利用できた日以降の株価で検証します。"
+                "履歴公表日を一括取得できないため、現段階では対象月の2か月後の月初を利用可能日とする"
+                "保守的な暫定検証です。相関は因果関係や将来予測を示しません。"
+            )
+            if semiconductor_iip.empty:
+                st.warning("電デバ統計がないため、過去検証を表示できません。")
+            else:
+                backtest_signals = build_semiconductor_backtest_signals(
+                    semiconductor_iip,
+                    None if machinery_orders.empty else machinery_orders,
+                )
+                backtest_assets = {
+                    name: theme_series[name]
+                    for name in (
+                        "日経平均株価",
+                        "TOPIX連動ETF（1306）",
+                        "SOX指数",
+                        "東京エレクトロン（8035）",
+                        "アドバンテスト（6857）",
+                        "ディスコ（6146）",
+                        "キオクシア（285A）",
+                    )
+                    if name in theme_series
+                }
+                for supplemental_asset in (
+                    "日経平均株価",
+                    "TOPIX連動ETF（1306）",
+                ):
+                    if supplemental_asset in backtest_assets:
+                        continue
+                    try:
+                        backtest_assets[supplemental_asset] = load_indicator_data(
+                            INDICATORS[supplemental_asset], str(theme_history_start)
+                        )
+                    except Exception as supplemental_error:
+                        st.warning(
+                            f"過去検証では {supplemental_asset}: {supplemental_error}"
+                        )
+                if backtest_signals.empty or not backtest_assets:
+                    st.warning(
+                        "経済指標または対象資産の履歴が不足しているため、過去検証を表示できません。"
+                    )
+                else:
+                    control_left, control_right = st.columns(2)
+                    with control_left:
+                        backtest_asset_name = st.selectbox(
+                            "検証する資産",
+                            list(backtest_assets),
+                            key="semiconductor_backtest_asset",
+                        )
+                    with control_right:
+                        lead_signal_name = st.selectbox(
+                            "相関を確認する経済指標",
+                            list(backtest_signals),
+                            key="semiconductor_lead_signal",
+                        )
+
+                    lead_lag = analyze_release_aware_lead_lag(
+                        backtest_signals[lead_signal_name],
+                        backtest_assets[backtest_asset_name],
+                    )
+                    lead_lag_display = lead_lag.copy()
+                    lead_lag_display["相関"] = lead_lag_display["相関"].map(
+                        lambda value: "—" if pd.isna(value) else f"{value:+.2f}"
+                    )
+                    st.markdown("###### リード・ラグ相関")
+                    st.dataframe(lead_lag_display, hide_index=True, width="stretch")
+
+                    available_conditions = [
+                        condition
+                        for condition, required_column in {
+                            "出荷前年比プラス転換": "電デバ出荷前年比",
+                            "在庫前年比マイナス転換": "電デバ在庫前年比",
+                            "受注3か月平均前年比+20%以上": "電子計算機等受注3か月平均前年比",
+                        }.items()
+                        if required_column in backtest_signals
+                    ]
+                    selected_condition = st.selectbox(
+                        "条件付き将来リターンの条件",
+                        available_conditions,
+                        key="semiconductor_return_condition",
+                    )
+                    condition_returns = analyze_semiconductor_condition_returns(
+                        backtest_signals,
+                        selected_condition,
+                        backtest_assets[backtest_asset_name],
+                    )
+                    condition_display = condition_returns.copy()
+                    for result_column in ("平均", "中央値", "上昇確率"):
+                        condition_display[result_column] = condition_display[
+                            result_column
+                        ].map(
+                            lambda value: "—" if pd.isna(value) else f"{value:+.1f}%"
+                        )
+                    st.markdown("###### 条件付き将来リターン")
+                    st.dataframe(
+                        condition_display, hide_index=True, width="stretch"
+                    )
+                    st.caption(
+                        "基準値は利用可能日の直前終値、将来値は各月数経過後の最初の取引日です。"
+                        "すべての結果にサンプル数を表示し、12件未満は「サンプル少」としています。"
+                        "最新ファイルの改定後データを使う暫定検証であり、当時公表値の完全な"
+                        "ポイント・イン・タイム検証ではありません。投資助言ではなく判断材料です。"
+                    )
 
         st.markdown("#### Market")
         theme_snapshot = build_theme_snapshot(theme_series, INDICATORS)
