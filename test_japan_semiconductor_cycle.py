@@ -3,7 +3,10 @@ import unittest
 import pandas as pd
 
 from japan_semiconductor_cycle import (
+    analyze_release_aware_lead_lag,
+    analyze_semiconductor_condition_returns,
     build_inventory_cycle_map,
+    build_semiconductor_backtest_signals,
     classify_inventory_cycle,
     electronic_computer_order_trends,
     semiconductor_iip_trends,
@@ -108,6 +111,59 @@ class JapanSemiconductorCycleTest(unittest.TestCase):
         self.assertEqual(len(trends), 4)
         self.assertEqual(list(trends), ["単月受注", "3か月移動平均"])
         self.assertEqual(trends.iloc[-1]["3か月移動平均"], 106.0)
+
+    def test_builds_backtest_signals_with_conservative_release_dates(self) -> None:
+        orders = pd.Series(
+            range(100, 115), index=self.frame.index, dtype=float
+        )
+
+        signals = build_semiconductor_backtest_signals(self.frame, orders)
+
+        self.assertEqual(signals.index[0], pd.Timestamp("2025-03-01"))
+        self.assertIn("電デバ出荷前年比", signals)
+        self.assertIn("電子計算機等受注3か月平均前年比", signals)
+        self.assertAlmostEqual(
+            signals.iloc[-1]["電デバ在庫前年比"], (96 / 108 - 1) * 100
+        )
+
+    def test_lead_lag_never_uses_price_on_or_before_release_as_future(self) -> None:
+        signal = pd.Series(
+            [1.0, 2.0, 3.0],
+            index=pd.to_datetime(["2024-03-01", "2024-04-01", "2024-05-01"]),
+        )
+        prices = pd.Series(
+            range(100, 230),
+            index=pd.date_range("2024-01-01", periods=130, freq="B"),
+            dtype=float,
+        )
+
+        result = analyze_release_aware_lead_lag(signal, prices, horizons=(1,))
+
+        self.assertEqual(result.iloc[0]["サンプル数"], 3)
+        self.assertFalse(pd.isna(result.iloc[0]["相関"]))
+
+    def test_conditional_returns_reports_sample_count_and_warning(self) -> None:
+        dates = pd.to_datetime(["2024-03-01", "2024-04-01", "2024-05-01"])
+        signals = pd.DataFrame(
+            {"電デバ出荷前年比": [-1.0, 2.0, 3.0]}, index=dates
+        )
+        prices = pd.Series(
+            range(100, 300),
+            index=pd.date_range("2024-01-01", periods=200, freq="B"),
+            dtype=float,
+        )
+
+        result = analyze_semiconductor_condition_returns(
+            signals,
+            "出荷前年比プラス転換",
+            prices,
+            horizons=(1,),
+            low_sample_threshold=2,
+        )
+
+        self.assertEqual(result.iloc[0]["サンプル数"], 1)
+        self.assertEqual(result.iloc[0]["注意"], "サンプル少")
+        self.assertGreater(result.iloc[0]["平均"], 0)
 
 
 if __name__ == "__main__":
