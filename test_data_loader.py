@@ -5,12 +5,13 @@ import pandas as pd
 import requests
 
 from data_loader import (
+    DataSchemaError,
     DataUnavailableError,
     IndicatorDataError,
     RetryFailure,
-    _download_estat_semiconductor_machinery_orders,
+    _download_estat_electronic_computer_orders,
     _parse_meti_iip_workbook,
-    _parse_estat_semiconductor_orders,
+    _parse_estat_electronic_computer_orders,
     _load_with_retry,
     load_indicator_data,
 )
@@ -127,8 +128,8 @@ class MetiIipParserTest(unittest.TestCase):
             _parse_meti_iip_workbook(b"workbook")
 
 
-class EstatMachineryOrdersParserTest(unittest.TestCase):
-    def test_extracts_direct_semiconductor_equipment_series(self) -> None:
+class EstatElectronicComputerOrdersParserTest(unittest.TestCase):
+    def test_extracts_electronic_computers_including_semiconductor_series(self) -> None:
         payload = {
             "GET_STATS_DATA": {
                 "RESULT": {"STATUS": 0},
@@ -143,7 +144,7 @@ class EstatMachineryOrdersParserTest(unittest.TestCase):
                                     {"@code": "100", "@name": "電子計算機等"},
                                     {
                                         "@code": "101",
-                                        "@name": "電子・通信機械_半導体製造装置",
+                                        "@name": "電子・通信機械_電子計算機等",
                                     },
                                 ],
                             },
@@ -168,13 +169,14 @@ class EstatMachineryOrdersParserTest(unittest.TestCase):
             }
         }
 
-        series, released_at = _parse_estat_semiconductor_orders(payload)
+        series, released_at = _parse_estat_electronic_computer_orders(payload)
 
         self.assertEqual(list(series), [120.0, 150.0])
         self.assertEqual(series.index[-1], pd.Timestamp("2026-06-01"))
+        self.assertEqual(series.name, "電子計算機等受注（半導体製造装置を含む）")
         self.assertEqual(released_at, pd.Timestamp("2026-08-19"))
 
-    def test_rejects_missing_direct_series(self) -> None:
+    def test_rejects_missing_electronic_computer_series(self) -> None:
         payload = {
             "GET_STATS_DATA": {
                 "RESULT": {"STATUS": 0},
@@ -198,15 +200,26 @@ class EstatMachineryOrdersParserTest(unittest.TestCase):
             }
         }
 
-        with self.assertRaisesRegex(DataUnavailableError, "半導体製造装置"):
-            _parse_estat_semiconductor_orders(payload)
+        with self.assertRaisesRegex(DataSchemaError, "電子計算機等"):
+            _parse_estat_electronic_computer_orders(payload)
+
+    @patch("data_loader.time.sleep")
+    def test_does_not_retry_changed_estat_classification(self, mock_sleep) -> None:
+        loader = unittest.mock.Mock(side_effect=DataSchemaError("changed metadata"))
+
+        with self.assertRaises(RetryFailure) as raised:
+            _load_with_retry(loader)
+
+        self.assertEqual(loader.call_count, 1)
+        self.assertIsInstance(raised.exception.error, DataSchemaError)
+        mock_sleep.assert_not_called()
 
     @patch("data_loader.requests.get")
     def test_http_error_does_not_expose_app_id(self, mock_get) -> None:
         mock_get.return_value.status_code = 403
 
         with self.assertRaises(requests.HTTPError) as context:
-            _download_estat_semiconductor_machinery_orders("private-app-id")
+            _download_estat_electronic_computer_orders("private-app-id")
 
         self.assertNotIn("private-app-id", str(context.exception))
 

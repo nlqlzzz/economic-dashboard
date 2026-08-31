@@ -12,7 +12,7 @@ from data_loader import (
     load_data,
     load_indicator_data,
     load_meti_semiconductor_iip,
-    load_semiconductor_machinery_orders,
+    load_electronic_computer_orders,
 )
 from data_status import build_data_status_frame
 from economic_calendar import (
@@ -31,9 +31,9 @@ from event_analysis import (
 from indicators import DATA_SOURCE_LABELS, INDICATORS
 from japan_semiconductor_cycle import (
     build_inventory_cycle_map,
-    semiconductor_machinery_order_trends,
+    electronic_computer_order_trends,
     semiconductor_iip_trends,
-    summarize_semiconductor_machinery_orders,
+    summarize_electronic_computer_orders,
     summarize_semiconductor_iip,
 )
 from macro_regime import (
@@ -1878,19 +1878,20 @@ with theme_tab:
                     f"市場データは引き続き表示します: {iip_error}"
                 )
 
-            st.markdown("##### 半導体製造装置受注")
+            st.markdown("##### 電子計算機等受注（半導体製造装置を含む）")
             st.caption(
-                "設備投資の振れをならして見るため、内閣府の半導体製造装置単体の"
-                "受注額（原系列）は3か月移動平均を中心に確認します。"
+                "内閣府の公表分類では、2017年6月以降、電子計算機と半導体製造装置が"
+                "「電子計算機等」に統合されています。半導体製造装置単独の系列ではないため、"
+                "設備投資の補助指標として3か月移動平均を中心に確認します。"
             )
             try:
-                with st.spinner("半導体製造装置受注を確認しています…"):
-                    machinery_orders = load_semiconductor_machinery_orders()
-                    machinery_summary = summarize_semiconductor_machinery_orders(
+                with st.spinner("電子計算機等受注を確認しています…"):
+                    machinery_orders = load_electronic_computer_orders()
+                    machinery_summary = summarize_electronic_computer_orders(
                         machinery_orders
                     )
                 if not machinery_summary:
-                    st.warning("半導体製造装置受注の有効な観測値がありません。")
+                    st.warning("電子計算機等受注の有効な観測値がありません。")
                 else:
                     machinery_summary_frame = pd.DataFrame(
                         [
@@ -1930,11 +1931,11 @@ with theme_tab:
                         hide_index=True,
                         width="stretch",
                     )
-                    machinery_trends = semiconductor_machinery_order_trends(
+                    machinery_trends = electronic_computer_order_trends(
                         machinery_orders
                     )
                     if not machinery_trends.empty:
-                        with st.expander("半導体製造装置受注の推移を見る"):
+                        with st.expander("電子計算機等受注の推移を見る"):
                             machinery_figure = go.Figure()
                             machinery_figure.add_trace(
                                 go.Bar(
@@ -1972,14 +1973,15 @@ with theme_tab:
                     st.caption(
                         f"原系列のため季節性を含みます。表示観測数: "
                         f"{machinery_summary['観測数']}か月。データ更新日: {release_text}。"
-                        "単月値だけで設備投資局面を判定せず、3か月平均と前年比を併記します。"
+                        "半導体製造装置単独の値ではありません。単月値だけで設備投資局面を"
+                        "判定せず、3か月平均と前年比を併記します。"
                     )
                     st.markdown(
                         f"データ出所: [e-Stat 機械受注統計調査（内閣府）]({source_url})"
                     )
             except Exception as machinery_error:
                 st.warning(
-                    "半導体製造装置受注を表示できません。電デバ統計と市場データは"
+                    "電子計算機等受注を表示できません。電デバ統計と市場データは"
                     f"引き続き表示します: {machinery_error}"
                 )
 
