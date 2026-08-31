@@ -41,6 +41,7 @@ ESTAT_MACHINERY_ORDERS_TABLE_ID = "0003355226"
 ESTAT_MACHINERY_ORDERS_SOURCE_URL = (
     "https://www.e-stat.go.jp/dbview?sid=0003355226"
 )
+ESTAT_MACHINERY_ORDERS_CLASS_NAME = "電子・通信機械_電子計算機等"
 LoadResult = TypeVar("LoadResult")
 
 
@@ -72,6 +73,10 @@ class IndicatorDataError(ValueError):
 
 class DataUnavailableError(ValueError):
     """取得先が有効な時系列を返さなかったことを表す。"""
+
+
+class DataSchemaError(DataUnavailableError):
+    """取得先の分類・構造が想定と一致しないことを表す。"""
 
 
 class RetryFailure(Exception):
@@ -195,13 +200,13 @@ def load_meti_semiconductor_iip() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
-def load_semiconductor_machinery_orders() -> pd.Series:
-    """e-Statから半導体製造装置の機械受注額（原系列・月次）を返す。"""
+def load_electronic_computer_orders() -> pd.Series:
+    """e-Statから半導体製造装置を含む電子計算機等受注を返す。"""
     app_id = _get_estat_app_id()
     started_at = time.perf_counter()
     try:
         (series, released_at), attempts = _load_with_retry(
-            lambda: _download_estat_semiconductor_machinery_orders(app_id)
+            lambda: _download_estat_electronic_computer_orders(app_id)
         )
     except RetryFailure as retry_failure:
         error = retry_failure.error
@@ -221,6 +226,9 @@ def load_semiconductor_machinery_orders() -> pd.Series:
             "table_id": ESTAT_MACHINERY_ORDERS_TABLE_ID,
             "unit": "百万円",
             "seasonal_adjustment": "原系列",
+            "official_series_name": ESTAT_MACHINERY_ORDERS_CLASS_NAME,
+            "includes_semiconductor_equipment": True,
+            "is_direct_semiconductor_series": False,
             "fetched_at": pd.Timestamp.now(tz="Asia/Tokyo"),
             "released_at": released_at,
             "fetch_attempts": attempts,
@@ -295,7 +303,7 @@ def _get_estat_app_id() -> str:
     return app_id
 
 
-def _download_estat_semiconductor_machinery_orders(
+def _download_estat_electronic_computer_orders(
     app_id: str,
 ) -> tuple[pd.Series, pd.Timestamp | None]:
     response = requests.get(
@@ -314,10 +322,10 @@ def _download_estat_semiconductor_machinery_orders(
         payload = response.json()
     except ValueError as error:
         raise requests.RequestException("e-Stat APIがJSON以外を返しました。") from error
-    return _parse_estat_semiconductor_orders(payload)
+    return _parse_estat_electronic_computer_orders(payload)
 
 
-def _parse_estat_semiconductor_orders(
+def _parse_estat_electronic_computer_orders(
     payload: dict[str, object],
 ) -> tuple[pd.Series, pd.Timestamp | None]:
     root = payload.get("GET_STATS_DATA", {})
@@ -347,11 +355,11 @@ def _parse_estat_semiconductor_orders(
         item
         for item in machine_classes
         if isinstance(item, dict)
-        and str(item.get("@name", "")).endswith("半導体製造装置")
+        and str(item.get("@name", "")) == ESTAT_MACHINERY_ORDERS_CLASS_NAME
     ]
     if len(machine_matches) != 1:
-        raise DataUnavailableError(
-            "e-Statで半導体製造装置の系列を一意に特定できません。"
+        raise DataSchemaError(
+            "e-Statで電子計算機等の受注系列を一意に特定できません。"
         )
     machine_code = str(machine_matches[0].get("@code", ""))
     machine_dimension_id = str(machine_dimension.get("@id", ""))
@@ -378,8 +386,12 @@ def _parse_estat_semiconductor_orders(
         if pd.notna(target_date) and pd.notna(value):
             observations[pd.Timestamp(target_date)] = float(value)
     if not observations:
-        raise DataUnavailableError("e-Statの半導体製造装置受注系列が空です。")
-    series = pd.Series(observations, name="半導体製造装置受注", dtype=float).sort_index()
+        raise DataUnavailableError("e-Statの電子計算機等受注系列が空です。")
+    series = pd.Series(
+        observations,
+        name="電子計算機等受注（半導体製造装置を含む）",
+        dtype=float,
+    ).sort_index()
 
     table_inf = statistical_data.get("TABLE_INF", {})
     updated_date = table_inf.get("UPDATED_DATE") if isinstance(table_inf, dict) else None
@@ -396,7 +408,7 @@ def _find_estat_dimension(
         if isinstance(item, dict) and name_fragment in str(item.get("@name", ""))
     ]
     if len(matches) != 1:
-        raise DataUnavailableError(
+        raise DataSchemaError(
             f"e-Statメタ情報の{name_fragment}を一意に特定できません。"
         )
     return matches[0]
@@ -454,6 +466,8 @@ def _parse_http_datetime(value: str | None) -> pd.Timestamp | None:
 
 
 def _is_transient_error(error: Exception) -> bool:
+    if isinstance(error, DataSchemaError):
+        return False
     if isinstance(
         error,
         (requests.Timeout, requests.ConnectionError, TimeoutError, ConnectionError),

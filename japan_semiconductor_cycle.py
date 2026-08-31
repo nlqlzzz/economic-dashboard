@@ -130,8 +130,8 @@ def classify_inventory_cycle(shipment_yoy: float, inventory_yoy: float) -> str:
     return INVENTORY_CYCLE_PHASES[(shipment_yoy >= 0, inventory_yoy >= 0)]
 
 
-def summarize_semiconductor_machinery_orders(series: pd.Series) -> dict[str, object]:
-    """半導体製造装置受注の単月値と平滑化したトレンド指標を返す。"""
+def summarize_electronic_computer_orders(series: pd.Series) -> dict[str, object]:
+    """電子計算機等受注の単月値と平滑化したトレンド指標を返す。"""
     orders = _clean_series(series)
     if orders.empty:
         return {}
@@ -161,7 +161,7 @@ def summarize_semiconductor_machinery_orders(series: pd.Series) -> dict[str, obj
     }
 
 
-def semiconductor_machinery_order_trends(
+def electronic_computer_order_trends(
     series: pd.Series, months: int = 36
 ) -> pd.DataFrame:
     """表示用に単月受注と3か月移動平均を直近指定月数へ絞る。"""
