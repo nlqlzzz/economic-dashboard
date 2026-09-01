@@ -5,6 +5,7 @@ from email.utils import parsedate_to_datetime
 from io import StringIO
 from io import BytesIO
 import os
+import re
 import time
 from typing import Callable, TypeVar
 
@@ -12,6 +13,11 @@ import pandas as pd
 import requests
 import streamlit as st
 import yfinance as yf
+
+from global_semiconductor_demand import (
+    parse_korea_customs_release,
+    parse_taiwan_export_orders_csv,
+)
 
 
 MAX_FETCH_ATTEMPTS = 2
@@ -42,6 +48,27 @@ ESTAT_MACHINERY_ORDERS_SOURCE_URL = (
     "https://www.e-stat.go.jp/dbview?sid=0003355226"
 )
 ESTAT_MACHINERY_ORDERS_CLASS_NAME = "電子・通信機械_電子計算機等"
+TAIWAN_EXPORT_ORDER_URLS = {
+    "electronic": (
+        "https://service.moea.gov.tw/EE520/opendata/"
+        "%E7%B6%93%E6%BF%9F%E9%83%A8%E7%B5%B1%E8%A8%88%E8%99%95_"
+        "%E5%A4%96%E9%8A%B7%E8%A8%82%E5%96%AE_"
+        "%E9%9B%BB%E5%AD%90%E7%94%A2%E5%93%81.csv"
+    ),
+    "information_communication": (
+        "https://service.moea.gov.tw/EE520/opendata/"
+        "%E7%B6%93%E6%BF%9F%E9%83%A8%E7%B5%B1%E8%A8%88%E8%99%95_"
+        "%E5%A4%96%E9%8A%B7%E8%A8%82%E5%96%AE_"
+        "%E8%B3%87%E8%A8%8A%E9%80%9A%E8%A8%8A%E7%94%A2%E5%93%81.csv"
+    ),
+}
+KOREA_CUSTOMS_LIST_URL = (
+    "http://www.customs.go.kr/kcs/na/ntt/selectNttList.do?mi=2891&bbsId=1362"
+)
+KOREA_CUSTOMS_RSS_URL = (
+    "http://www.customs.go.kr/kcs/selectBoardRss.do?mi=15265&bbsId=1362"
+)
+KOREA_CUSTOMS_BASE_URL = "http://www.customs.go.kr"
 LoadResult = TypeVar("LoadResult")
 
 
@@ -236,6 +263,212 @@ def load_electronic_computer_orders() -> pd.Series:
         }
     )
     return series
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def load_taiwan_semiconductor_orders() -> pd.DataFrame:
+    """台湾経済部の電子製品・情報通信製品輸出受注を返す。"""
+    started_at = time.perf_counter()
+    frames: list[pd.DataFrame] = []
+    total_attempts = 0
+    fetched_at = pd.Timestamp.now(tz="Asia/Tokyo")
+    for series_key, url in TAIWAN_EXPORT_ORDER_URLS.items():
+        try:
+            response, attempts = _load_with_retry(lambda target=url: _download_bytes(target))
+        except RetryFailure as retry_failure:
+            error = retry_failure.error
+            raise SourceLoadError(
+                LoadFailure(
+                    source="taiwan_moea",
+                    ticker=series_key,
+                    error_type=_classify_error(error),
+                    detail=str(error),
+                    attempts=retry_failure.attempts,
+                )
+            ) from error
+        total_attempts += attempts
+        try:
+            frames.append(parse_taiwan_export_orders_csv(response, url, fetched_at))
+        except ValueError as error:
+            raise DataSchemaError(str(error)) from error
+    result = pd.concat(frames, ignore_index=True)
+    result.attrs.update(
+        {
+            "source": "台湾経済部 統計処 外銷訂單統計",
+            "source_url": "https://data.gov.tw/dataset/16362",
+            "fetched_at": fetched_at,
+            "fetch_attempts": total_attempts,
+            "fetch_duration_seconds": time.perf_counter() - started_at,
+        }
+    )
+    return result
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def load_korea_semiconductor_exports() -> pd.DataFrame:
+    """韓国関税庁から最新の1–10日、1–20日、月次半導体輸出を返す。"""
+    started_at = time.perf_counter()
+    fetched_at = pd.Timestamp.now(tz="Asia/Tokyo")
+    try:
+        article_links, discovery_attempts = _load_with_retry(_discover_korea_release_links)
+    except RetryFailure as retry_failure:
+        error = retry_failure.error
+        raise SourceLoadError(
+            LoadFailure(
+                source="korea_customs",
+                ticker="semiconductor_exports",
+                error_type=_classify_error(error),
+                detail=str(error),
+                attempts=retry_failure.attempts,
+            )
+        ) from error
+
+    found: dict[str, pd.DataFrame] = {}
+    failures: list[str] = []
+    article_attempts = 0
+    for title, url in article_links:
+        if len(found) == 3:
+            break
+        try:
+            html, attempts = _load_with_retry(lambda target=url: _download_text(target))
+            article_attempts += attempts
+            parsed = parse_korea_customs_release(html, url, fetched_at)
+        except Exception as error:
+            failures.append(f"{title}: {error}")
+            continue
+        primary = parsed[~parsed["is_derived"]].iloc[0]
+        kind = str(primary["series_id"]).removeprefix("korea_semiconductor_exports_")
+        if kind in {"1_10", "1_20", "monthly"} and kind not in found:
+            found[kind] = parsed
+    missing = [kind for kind in ("1_10", "1_20", "monthly") if kind not in found]
+    if missing:
+        detail = " / ".join(failures[:3])
+        raise DataUnavailableError(
+            f"韓国半導体輸出の取得不足: {', '.join(missing)}"
+            + (f"（{detail}）" if detail else "")
+        )
+    result = pd.concat([found[kind] for kind in ("1_10", "1_20", "monthly")], ignore_index=True)
+    result.attrs.update(
+        {
+            "source": "韓国関税庁 輸出入現況",
+            "source_url": KOREA_CUSTOMS_LIST_URL,
+            "fetched_at": fetched_at,
+            "fetch_attempts": discovery_attempts + article_attempts,
+            "fetch_duration_seconds": time.perf_counter() - started_at,
+        }
+    )
+    return result
+
+
+def _download_bytes(url: str) -> bytes:
+    response = requests.get(url, headers=METI_REQUEST_HEADERS, timeout=30)
+    response.raise_for_status()
+    if not response.content:
+        raise DataUnavailableError(f"公式データが空です: {url}")
+    return response.content
+
+
+def _download_text(url: str) -> str:
+    response = requests.get(url, headers=METI_REQUEST_HEADERS, timeout=30)
+    response.raise_for_status()
+    if not response.text.strip():
+        raise DataUnavailableError(f"公式ページが空です: {url}")
+    return response.text
+
+
+def _discover_korea_release_links() -> list[tuple[str, str]]:
+    """関税庁の検索結果から半導体速報・月次発表候補を新しい順に返す。"""
+    from html.parser import HTMLParser
+    from urllib.parse import urljoin
+    import xml.etree.ElementTree as ET
+
+    class ArticleLinkParser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.href: str | None = None
+            self.parts: list[str] = []
+            self.links: list[tuple[str, str]] = []
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag.lower() != "a":
+                return
+            attributes = dict(attrs)
+            href = attributes.get("href")
+            if href and "selectNttInfo" in href:
+                self.href = href
+                self.parts = []
+                return
+            action = " ".join(
+                value or "" for key, value in attrs if key in {"href", "onclick"}
+            )
+            article_id = re.search(r"(?:nttSn\D+|fnView\s*\(\s*['\"]?)(\d{6,})", action)
+            if article_id:
+                self.href = (
+                    "/kcs/na/ntt/selectNttInfo.do?mi=2891&bbsId=1362&nttSn="
+                    f"{article_id.group(1)}"
+                )
+                self.parts = []
+
+        def handle_data(self, data: str) -> None:
+            if self.href is not None:
+                self.parts.append(data)
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag.lower() == "a" and self.href is not None:
+                title = " ".join("".join(self.parts).split())
+                self.links.append((title, urljoin(KOREA_CUSTOMS_BASE_URL, self.href)))
+                self.href = None
+                self.parts = []
+
+    collected: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    rss_response = requests.get(
+        KOREA_CUSTOMS_RSS_URL, headers=METI_REQUEST_HEADERS, timeout=20
+    )
+    rss_response.raise_for_status()
+    try:
+        root = ET.fromstring(rss_response.content)
+    except ET.ParseError as error:
+        raise DataSchemaError("韓国関税庁RSSの形式が不正です。") from error
+    for item in root.findall(".//item"):
+        title = " ".join((item.findtext("title") or "").split())
+        url = (item.findtext("link") or "").strip()
+        if "수출입 현황" in title and url and url not in seen:
+            seen.add(url)
+            collected.append((title, url))
+
+    if _has_all_korea_release_kinds(collected):
+        return collected
+
+    for page_index in range(2, 4):
+        response = requests.get(
+            KOREA_CUSTOMS_LIST_URL,
+            params={"pageIndex": page_index},
+            headers=METI_REQUEST_HEADERS,
+            timeout=20,
+        )
+        response.raise_for_status()
+        parser = ArticleLinkParser()
+        parser.feed(response.text)
+        for title, url in parser.links:
+            if "수출입 현황" not in title or url in seen:
+                continue
+            seen.add(url)
+            collected.append((title, url))
+        if _has_all_korea_release_kinds(collected):
+            break
+    if not collected:
+        raise DataUnavailableError("韓国関税庁の輸出入発表一覧を取得できません。")
+    return collected
+
+
+def _has_all_korea_release_kinds(links: list[tuple[str, str]]) -> bool:
+    titles = " ".join(title.replace(" ", "") for title, _ in links)
+    return (
+        re.search(r"1일[~∼\-].{0,5}10일", titles) is not None
+        and re.search(r"1일[~∼\-].{0,5}20일", titles) is not None
+        and "월간수출입현황" in titles
+    )
 
 
 def _load_with_retry(

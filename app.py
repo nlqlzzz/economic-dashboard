@@ -10,9 +10,11 @@ from streamlit_local_storage import LocalStorage
 
 from data_loader import (
     load_data,
-    load_indicator_data,
-    load_meti_semiconductor_iip,
     load_electronic_computer_orders,
+    load_indicator_data,
+    load_korea_semiconductor_exports,
+    load_meti_semiconductor_iip,
+    load_taiwan_semiconductor_orders,
 )
 from data_status import build_data_status_frame
 from economic_calendar import (
@@ -69,6 +71,11 @@ from similar_periods import (
     SIMILAR_FEATURE_DEFINITIONS,
     build_point_in_time_features,
     find_similar_periods,
+)
+from semiconductor_view import (
+    render_global_demand,
+    render_semiconductor_market_compact,
+    render_semiconductor_snapshot,
 )
 from correlation_analysis import (
     build_correlation_frame,
@@ -1687,14 +1694,52 @@ with theme_tab:
         if selected_theme_name == "半導体":
             semiconductor_iip = pd.DataFrame()
             machinery_orders = pd.Series(dtype=float)
-            st.markdown("#### Japan Fundamental Cycle")
+            taiwan_orders = pd.DataFrame()
+            korea_exports = pd.DataFrame()
+            taiwan_error_text = None
+            korea_error_text = None
+            japan_snapshot_assessment = None
+            try:
+                taiwan_orders = load_taiwan_semiconductor_orders()
+            except Exception as taiwan_error:
+                taiwan_error_text = str(taiwan_error)
+            try:
+                korea_exports = load_korea_semiconductor_exports()
+            except Exception as korea_error:
+                korea_error_text = str(korea_error)
+            try:
+                snapshot_iip = load_meti_semiconductor_iip()
+                semiconductor_iip = snapshot_iip
+                japan_snapshot_assessment = summarize_semiconductor_iip(snapshot_iip)[
+                    "assessment"
+                ]
+            except Exception:
+                japan_snapshot_assessment = None
+
+            render_semiconductor_snapshot(
+                theme_series,
+                INDICATORS,
+                taiwan_orders,
+                korea_exports,
+                japan_snapshot_assessment,
+            )
+            render_semiconductor_market_compact(theme_series, INDICATORS)
+            render_global_demand(
+                taiwan_orders,
+                korea_exports,
+                taiwan_error_text,
+                korea_error_text,
+            )
+
+            st.markdown("#### Japan Cycle")
             st.caption(
                 "経済産業省の電子部品・デバイス工業から、生産・出荷・在庫・在庫率を"
                 "組み合わせて日本の半導体実体サイクルを確認します。"
             )
             try:
                 with st.spinner("電デバの鉱工業指数を確認しています…"):
-                    semiconductor_iip = load_meti_semiconductor_iip()
+                    if semiconductor_iip.empty:
+                        semiconductor_iip = load_meti_semiconductor_iip()
                     semiconductor_iip_result = summarize_semiconductor_iip(
                         semiconductor_iip
                     )
@@ -1991,6 +2036,7 @@ with theme_tab:
                     f"引き続き表示します: {machinery_error}"
                 )
 
+            st.markdown("#### Historical Validation")
             st.markdown("##### 過去の株価反応を検証")
             st.caption(
                 "経済統計の対象月ではなく、市場参加者が利用できた日以降の株価で検証します。"
@@ -2098,7 +2144,7 @@ with theme_tab:
                         "ポイント・イン・タイム検証ではありません。投資助言ではなく判断材料です。"
                     )
 
-        st.markdown("#### Market")
+        st.markdown("#### Market Details / Relative")
         theme_snapshot = build_theme_snapshot(theme_series, INDICATORS)
         if theme_snapshot.empty:
             st.info("テーマの最新状況を表示できるデータがありません。")

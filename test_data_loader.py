@@ -14,6 +14,7 @@ from data_loader import (
     _parse_estat_electronic_computer_orders,
     _load_with_retry,
     load_indicator_data,
+    load_korea_semiconductor_exports,
 )
 
 
@@ -222,6 +223,48 @@ class EstatElectronicComputerOrdersParserTest(unittest.TestCase):
             _download_estat_electronic_computer_orders("private-app-id")
 
         self.assertNotIn("private-app-id", str(context.exception))
+
+
+class KoreaSemiconductorLoaderTest(unittest.TestCase):
+    @patch("data_loader._download_text")
+    @patch("data_loader._discover_korea_release_links")
+    def test_loads_all_three_publication_periods_without_external_access(
+        self, mock_discover, mock_download
+    ) -> None:
+        mock_discover.return_value = [
+            ("1-10", "https://official.example/10"),
+            ("1-20", "https://official.example/20"),
+            ("monthly", "https://official.example/monthly"),
+        ]
+        bodies = {
+            "https://official.example/10": (
+                "<h1>2026년 8월 1일 ~ 8월 10일 수출입 현황 [잠정치]</h1>"
+                "<p>등록일 2026.08.11 반도체(100 억 달러) 반도체(45.0%)</p>"
+            ),
+            "https://official.example/20": (
+                "<h1>2026년 8월 1일 ~ 8월 20일 수출입 현황 [잠정치]</h1>"
+                "<p>등록일 2026.08.21 반도체(260 억 달러) 반도체(50.0%)</p>"
+            ),
+            "https://official.example/monthly": (
+                "<h1>2026년 8월 수출입 현황 [잠정치]</h1>"
+                "<p>등록일 2026.09.01 반도체(400 억 달러) 반도체(55.0%)</p>"
+            ),
+        }
+        mock_download.side_effect = lambda url: bodies[url]
+
+        frame = load_korea_semiconductor_exports.__wrapped__()
+
+        official = frame[~frame["is_derived"]]
+        self.assertEqual(
+            set(official["series_id"]),
+            {
+                "korea_semiconductor_exports_1_10",
+                "korea_semiconductor_exports_1_20",
+                "korea_semiconductor_exports_monthly",
+            },
+        )
+        self.assertEqual(set(official["is_partial_period"]), {True, False})
+        self.assertTrue(official["release_date"].notna().all())
 
 
 class RetryBehaviorTest(unittest.TestCase):
