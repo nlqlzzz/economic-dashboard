@@ -64,12 +64,12 @@ TAIWAN_EXPORT_ORDER_URLS = {
     ),
 }
 KOREA_CUSTOMS_LIST_URL = (
-    "http://www.customs.go.kr/kcs/na/ntt/selectNttList.do?mi=2891&bbsId=1362"
+    "https://www.customs.go.kr/kcs/na/ntt/selectNttList.do?mi=2891&bbsId=1362"
 )
 KOREA_CUSTOMS_RSS_URL = (
-    "http://www.customs.go.kr/kcs/selectBoardRss.do?mi=15265&bbsId=1362"
+    "https://www.customs.go.kr/kcs/selectBoardRss.do?mi=15265&bbsId=1362"
 )
-KOREA_CUSTOMS_BASE_URL = "http://www.customs.go.kr"
+KOREA_CUSTOMS_BASE_URL = "https://www.customs.go.kr"
 KOREA_MOTIR_PRESS_URL = "https://www.motir.go.kr/"
 LoadResult = TypeVar("LoadResult")
 
@@ -308,26 +308,22 @@ def load_taiwan_semiconductor_orders() -> pd.DataFrame:
 
 @st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
 def load_korea_semiconductor_exports() -> pd.DataFrame:
-    """韓国関税庁から最新の1–10日、1–20日、月次半導体輸出を返す。"""
+    """韓国公式発表から最新の1–10日、1–20日、月次半導体輸出を返す。"""
     started_at = time.perf_counter()
     fetched_at = pd.Timestamp.now(tz="Asia/Tokyo")
+    found: dict[str, pd.DataFrame] = {}
+    failures: list[str] = []
+    article_attempts = 0
     try:
         article_links, discovery_attempts = _load_with_retry(_discover_korea_release_links)
     except RetryFailure as retry_failure:
         error = retry_failure.error
-        raise SourceLoadError(
-            LoadFailure(
-                source="korea_customs",
-                ticker="semiconductor_exports",
-                error_type=_classify_error(error),
-                detail=str(error),
-                attempts=retry_failure.attempts,
-            )
-        ) from error
-
-    found: dict[str, pd.DataFrame] = {}
-    failures: list[str] = []
-    article_attempts = 0
+        article_links = []
+        discovery_attempts = retry_failure.attempts
+        failures.append(
+            "韓国関税庁 速報探索: "
+            f"{_classify_error(error)}（{retry_failure.attempts}回）: {error}"
+        )
     for candidate in article_links:
         if len(found) == 3:
             break
@@ -357,7 +353,27 @@ def load_korea_semiconductor_exports() -> pd.DataFrame:
         kind = str(primary["series_id"]).removeprefix("korea_semiconductor_exports_")
         if kind in {"1_10", "1_20", "monthly"} and kind not in found:
             found[kind] = parsed
-    if "monthly" not in found:
+    partial_reference_periods = [
+        frame.loc[~frame["is_derived"], "reference_period"].max()
+        for kind, frame in found.items()
+        if kind in {"1_10", "1_20"}
+    ]
+    monthly_reference_period = (
+        found["monthly"].loc[
+            ~found["monthly"]["is_derived"], "reference_period"
+        ].max()
+        if "monthly" in found
+        else pd.NaT
+    )
+    latest_partial_period = (
+        max(partial_reference_periods) if partial_reference_periods else pd.NaT
+    )
+    monthly_is_missing_or_stale = "monthly" not in found or (
+        pd.notna(latest_partial_period)
+        and pd.notna(monthly_reference_period)
+        and monthly_reference_period < latest_partial_period
+    )
+    if monthly_is_missing_or_stale:
         try:
             monthly_url, discovery_attempts_extra = _load_with_retry(
                 _discover_korea_monthly_trade_release
