@@ -128,6 +128,18 @@ def _render_korea_exports(frame: pd.DataFrame) -> None:
     if frame.empty:
         st.info("韓国半導体輸出データがありません。")
         return
+    missing_periods = frame.attrs.get("missing_periods", [])
+    if missing_periods:
+        labels = {
+            "1_10": "1–10日速報",
+            "1_20": "1–20日速報",
+            "monthly": "月次",
+        }
+        missing_text = "、".join(labels.get(kind, kind) for kind in missing_periods)
+        st.warning(
+            f"韓国半導体輸出は {missing_text} を取得できませんでした。"
+            "取得済みの公式区分だけを表示します。"
+        )
     official = frame[~frame["is_derived"]].copy().sort_values("period_end")
     display = official[["series_name", "value", "yoy", "period_start", "period_end", "release_date", "working_days", "publication_stage"]].copy()
     display.columns = ["区分", "輸出額", "前年比", "期間開始", "期間終了", "公表日", "営業日数", "公表段階"]

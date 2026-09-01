@@ -10,6 +10,7 @@ from data_loader import (
     IndicatorDataError,
     RetryFailure,
     _download_estat_electronic_computer_orders,
+    _korea_release_title_kind,
     _parse_meti_iip_workbook,
     _parse_estat_electronic_computer_orders,
     _load_with_retry,
@@ -226,6 +227,24 @@ class EstatElectronicComputerOrdersParserTest(unittest.TestCase):
 
 
 class KoreaSemiconductorLoaderTest(unittest.TestCase):
+    def test_filters_nonstandard_trade_release_titles(self) -> None:
+        self.assertEqual(
+            _korea_release_title_kind(
+                "2026년 8월 1일 ~ 8월 10일 수출입 현황 [잠정치]"
+            ),
+            "1_10",
+        )
+        self.assertEqual(
+            _korea_release_title_kind("2026년 8월 수출입 현황 [잠정치]"),
+            "monthly",
+        )
+        self.assertIsNone(
+            _korea_release_title_kind("2026년 7월 기업규모별 수출입 현황")
+        )
+        self.assertIsNone(
+            _korea_release_title_kind("2026년 7월 수출입 운송비용 현황")
+        )
+
     @patch("data_loader._download_text")
     @patch("data_loader._discover_korea_release_links")
     def test_loads_all_three_publication_periods_without_external_access(
@@ -265,6 +284,31 @@ class KoreaSemiconductorLoaderTest(unittest.TestCase):
         )
         self.assertEqual(set(official["is_partial_period"]), {True, False})
         self.assertTrue(official["release_date"].notna().all())
+
+    @patch("data_loader._download_text")
+    @patch("data_loader._discover_korea_release_links")
+    def test_keeps_available_period_when_another_period_cannot_be_parsed(
+        self, mock_discover, mock_download
+    ) -> None:
+        mock_discover.return_value = [
+            ("1-20", "https://official.example/20"),
+            ("monthly", "https://official.example/monthly"),
+        ]
+        mock_download.side_effect = [
+            (
+                "<h1>2026년 8월 1일 ~ 8월 20일 수출입 현황 [잠정치]</h1>"
+                "<p>등록일 2026.08.21 반도체(260억 달러)</p>"
+            ),
+            "<h1>2026년 8월 수출입 현황 [잠정치]</h1><p>반도체 역대최대</p>",
+        ]
+
+        frame = load_korea_semiconductor_exports.__wrapped__()
+
+        self.assertEqual(
+            list(frame[~frame["is_derived"]]["series_id"]),
+            ["korea_semiconductor_exports_1_20"],
+        )
+        self.assertEqual(frame.attrs["missing_periods"], ["1_10", "monthly"])
 
 
 class RetryBehaviorTest(unittest.TestCase):
