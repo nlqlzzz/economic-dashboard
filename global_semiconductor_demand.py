@@ -114,20 +114,21 @@ def parse_korea_customs_release(
     text = _html_to_text(html)
     period = _parse_korea_period(text)
     amount_match = re.search(
-        r"반도체\s*\(\s*([0-9]+(?:\.[0-9]+)?)\s*억\s*달러\s*\)", text
+        r"반도체(?:\s*수출)?\s*\(\s*([0-9]+(?:\.[0-9]+)?)\s*억\s*달러\s*\)",
+        text,
     )
     yoy_matches = re.findall(
         r"반도체\s*\(\s*([△▲+\-−]?\s*[0-9]+(?:\.[0-9]+)?)\s*%\s*\)", text
     )
-    if period is None or amount_match is None or not yoy_matches:
+    if period is None or amount_match is None:
         raise ValueError("韓国関税庁発表から半導体輸出を特定できません。")
 
     release_match = re.search(r"등록일\s*(20\d{2})[.\-/](\d{1,2})[.\-/](\d{1,2})", text)
     release_date = (
         pd.Timestamp(*map(int, release_match.groups())) if release_match else pd.NaT
     )
-    # 発表本文では輸出の後に輸入の半導体前年比が現れるため、最初の値を使う。
-    yoy = _parse_signed_number(yoy_matches[0])
+    # 半導体単独の前年比は画像だけで提供される月がある。本文にない値は推測しない。
+    yoy = _parse_signed_number(yoy_matches[0]) if yoy_matches else None
     amount_million_usd = float(amount_match.group(1)) * 100
     stage = _korea_publication_stage(text, period[2])
     current_days, previous_days = _parse_working_days(text)
@@ -156,7 +157,13 @@ def parse_korea_customs_release(
         "yoy_is_derived": False,
     }
     rows = [primary]
-    if current_days and previous_days and current_days > 0 and previous_days > 0:
+    if (
+        yoy is not None
+        and current_days
+        and previous_days
+        and current_days > 0
+        and previous_days > 0
+    ):
         adjusted_yoy = ((1 + yoy / 100) * previous_days / current_days - 1) * 100
         rows.append(
             {

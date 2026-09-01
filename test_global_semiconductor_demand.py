@@ -82,6 +82,41 @@ class GlobalSemiconductorDemandTest(unittest.TestCase):
         self.assertFalse(frame.iloc[0]["is_derived"])
         self.assertTrue(pd.isna(frame.iloc[0]["working_days"]))
 
+    def test_accepts_official_amount_when_semiconductor_yoy_is_not_in_text(self) -> None:
+        html = """
+        <h1>2026년 8월 1일 ~ 8월 20일 수출입 현황 [잠정치]</h1>
+        <div>등록일 2026.08.21</div>
+        <p>동기간 수출 역대최대 / 반도체(260억 달러) 수출 동기간 역대최대</p>
+        <p>※조업일수[(’25)14.5일,(’26)14.0일]고려</p>
+        """
+
+        frame = parse_korea_customs_release(
+            html,
+            "https://official.example/korea",
+            pd.Timestamp("2026-09-01", tz="Asia/Tokyo"),
+        )
+
+        self.assertEqual(len(frame), 1)
+        self.assertEqual(frame.iloc[0]["value"], 26000.0)
+        self.assertTrue(pd.isna(frame.iloc[0]["yoy"]))
+        self.assertFalse(frame.iloc[0]["is_derived"])
+
+    def test_accepts_monthly_semiconductor_export_wording(self) -> None:
+        html = """
+        <h1>2026년 7월 월간 수출입 현황 [확정치]</h1>
+        <div>등록일 2026.08.18</div>
+        <p>반도체 수출(412억 달러) 2개월 연속 증가</p>
+        """
+
+        frame = parse_korea_customs_release(
+            html,
+            "https://official.example/korea",
+            pd.Timestamp("2026-09-01", tz="Asia/Tokyo"),
+        )
+
+        self.assertEqual(frame.iloc[0]["value"], 41200.0)
+        self.assertTrue(pd.isna(frame.iloc[0]["yoy"]))
+
     def test_distinguishes_korea_monthly_from_partial_period(self) -> None:
         html = """
         <h1>2026년 7월 월간 수출입 현황 [확정치]</h1>

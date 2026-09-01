@@ -341,13 +341,16 @@ def load_korea_semiconductor_exports() -> pd.DataFrame:
         if kind in {"1_10", "1_20", "monthly"} and kind not in found:
             found[kind] = parsed
     missing = [kind for kind in ("1_10", "1_20", "monthly") if kind not in found]
-    if missing:
+    if not found:
         detail = " / ".join(failures[:3])
         raise DataUnavailableError(
-            f"韓国半導体輸出の取得不足: {', '.join(missing)}"
+            "韓国半導体輸出を1件も取得できません。"
             + (f"（{detail}）" if detail else "")
         )
-    result = pd.concat([found[kind] for kind in ("1_10", "1_20", "monthly")], ignore_index=True)
+    result = pd.concat(
+        [found[kind] for kind in ("1_10", "1_20", "monthly") if kind in found],
+        ignore_index=True,
+    )
     result.attrs.update(
         {
             "source": "韓国関税庁 輸出入現況",
@@ -355,6 +358,8 @@ def load_korea_semiconductor_exports() -> pd.DataFrame:
             "fetched_at": fetched_at,
             "fetch_attempts": discovery_attempts + article_attempts,
             "fetch_duration_seconds": time.perf_counter() - started_at,
+            "missing_periods": missing,
+            "load_warnings": failures,
         }
     )
     return result
@@ -433,7 +438,7 @@ def _discover_korea_release_links() -> list[tuple[str, str]]:
     for item in root.findall(".//item"):
         title = " ".join((item.findtext("title") or "").split())
         url = (item.findtext("link") or "").strip()
-        if "수출입 현황" in title and url and url not in seen:
+        if _korea_release_title_kind(title) and url and url not in seen:
             seen.add(url)
             collected.append((title, url))
 
@@ -451,7 +456,7 @@ def _discover_korea_release_links() -> list[tuple[str, str]]:
         parser = ArticleLinkParser()
         parser.feed(response.text)
         for title, url in parser.links:
-            if "수출입 현황" not in title or url in seen:
+            if not _korea_release_title_kind(title) or url in seen:
                 continue
             seen.add(url)
             collected.append((title, url))
@@ -463,12 +468,25 @@ def _discover_korea_release_links() -> list[tuple[str, str]]:
 
 
 def _has_all_korea_release_kinds(links: list[tuple[str, str]]) -> bool:
-    titles = " ".join(title.replace(" ", "") for title, _ in links)
-    return (
-        re.search(r"1일[~∼\-].{0,5}10일", titles) is not None
-        and re.search(r"1일[~∼\-].{0,5}20일", titles) is not None
-        and "월간수출입현황" in titles
-    )
+    return {kind for title, _ in links if (kind := _korea_release_title_kind(title))} == {
+        "1_10",
+        "1_20",
+        "monthly",
+    }
+
+
+def _korea_release_title_kind(title: str) -> str | None:
+    """半導体輸出を掲載する通常の速報・月次発表だけを識別する。"""
+    compact = re.sub(r"\s+", "", title)
+    if any(excluded in compact for excluded in ("기업규모별", "운송비용")):
+        return None
+    if re.search(r"1일[~∼\-].{0,5}10일수출입현황", compact):
+        return "1_10"
+    if re.search(r"1일[~∼\-].{0,5}20일수출입현황", compact):
+        return "1_20"
+    if re.search(r"20\d{2}년\d{1,2}월(?:월간)?수출입현황", compact):
+        return "monthly"
+    return None
 
 
 def _load_with_retry(
