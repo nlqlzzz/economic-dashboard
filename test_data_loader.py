@@ -10,6 +10,8 @@ from data_loader import (
     IndicatorDataError,
     RetryFailure,
     _download_estat_electronic_computer_orders,
+    _discover_korea_monthly_trade_release,
+    _discover_korea_release_links,
     _korea_release_title_kind,
     _parse_meti_iip_workbook,
     _parse_estat_electronic_computer_orders,
@@ -227,6 +229,55 @@ class EstatElectronicComputerOrdersParserTest(unittest.TestCase):
 
 
 class KoreaSemiconductorLoaderTest(unittest.TestCase):
+    @patch("data_loader.requests.get")
+    def test_discovers_current_kcs_data_attribute_link(self, mock_get) -> None:
+        rss = """<?xml version="1.0" encoding="UTF-8"?>
+        <rss><channel><item>
+          <title>2026년 8월 1일 ~ 8월 20일 수출입 현황 [잠정치]</title>
+          <link>https://official.example/20</link>
+          <description>반도체(260 억 달러)</description>
+        </item><item>
+          <title>2026년 8월 수출입 현황 [잠정치]</title>
+          <link>https://official.example/monthly</link>
+        </item></channel></rss>""".encode("utf-8")
+        listing = """
+        <a href="javascript:" data-id="10172763"
+           data-url="baccec5a7b47a665ac4d22878c83804b"
+           title="2026년 8월 1일 ~ 8월 10일 수출입 현황 [잠정치]">
+          2026년 8월 1일 ~ 8월 10일 수출입 현황 [잠정치]
+        </a>
+        """
+
+        rss_response = unittest.mock.Mock(content=rss)
+        rss_response.raise_for_status.return_value = None
+        list_response = unittest.mock.Mock(text=listing)
+        list_response.raise_for_status.return_value = None
+        mock_get.side_effect = [rss_response, list_response]
+
+        links = _discover_korea_release_links()
+
+        one_to_ten = next(link for link in links if "1일 ~ 8월 10일" in link[0])
+        self.assertIn("nttSn=10172763", one_to_ten[1])
+        self.assertIn("nttSnUrl=baccec5a7b47a665ac4d22878c83804b", one_to_ten[1])
+
+    @patch("data_loader.requests.get")
+    def test_discovers_motir_monthly_release_from_official_home(self, mock_get) -> None:
+        response = unittest.mock.Mock(
+            text=(
+                '<a href="/kor/article/ATCL3f49a5a8c/172145/view">'
+                "2026년 8월 수출입동향</a>"
+            )
+        )
+        response.raise_for_status.return_value = None
+        mock_get.return_value = response
+
+        url = _discover_korea_monthly_trade_release()
+
+        self.assertEqual(
+            url,
+            "https://www.motir.go.kr/kor/article/ATCL3f49a5a8c/172145/view",
+        )
+
     def test_filters_nonstandard_trade_release_titles(self) -> None:
         self.assertEqual(
             _korea_release_title_kind(
@@ -244,6 +295,36 @@ class KoreaSemiconductorLoaderTest(unittest.TestCase):
         self.assertIsNone(
             _korea_release_title_kind("2026년 7월 수출입 운송비용 현황")
         )
+
+    @patch(
+        "data_loader._discover_korea_monthly_trade_release",
+        side_effect=DataUnavailableError("monthly unavailable"),
+    )
+    @patch("data_loader._download_text")
+    @patch("data_loader._discover_korea_release_links")
+    def test_uses_official_rss_body_when_article_link_has_no_body(
+        self, mock_discover, mock_download, mock_monthly_discover
+    ) -> None:
+        mock_discover.return_value = [
+            (
+                "2026년 8월 1일 ~ 8월 20일 수출입 현황 [잠정치]",
+                "https://official.example/rss-link",
+                (
+                    "<p>등록일 2026.08.21</p>"
+                    "<p>반도체(260 억 달러) 수출 동기간 역대최대</p>"
+                ),
+            )
+        ]
+
+        frame = load_korea_semiconductor_exports.__wrapped__()
+
+        official = frame[~frame["is_derived"]].iloc[0]
+        self.assertEqual(
+            official["series_id"], "korea_semiconductor_exports_1_20"
+        )
+        self.assertEqual(official["value"], 26_000)
+        self.assertTrue(pd.isna(official["yoy"]))
+        mock_download.assert_not_called()
 
     @patch("data_loader._download_text")
     @patch("data_loader._discover_korea_release_links")
@@ -285,10 +366,14 @@ class KoreaSemiconductorLoaderTest(unittest.TestCase):
         self.assertEqual(set(official["is_partial_period"]), {True, False})
         self.assertTrue(official["release_date"].notna().all())
 
+    @patch(
+        "data_loader._discover_korea_monthly_trade_release",
+        side_effect=DataUnavailableError("monthly unavailable"),
+    )
     @patch("data_loader._download_text")
     @patch("data_loader._discover_korea_release_links")
     def test_keeps_available_period_when_another_period_cannot_be_parsed(
-        self, mock_discover, mock_download
+        self, mock_discover, mock_download, mock_monthly_discover
     ) -> None:
         mock_discover.return_value = [
             ("1-20", "https://official.example/20"),
