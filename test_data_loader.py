@@ -229,6 +229,72 @@ class EstatElectronicComputerOrdersParserTest(unittest.TestCase):
 
 
 class KoreaSemiconductorLoaderTest(unittest.TestCase):
+    @patch("data_loader.time.sleep")
+    @patch("data_loader._download_text")
+    @patch("data_loader._discover_korea_monthly_trade_release")
+    @patch("data_loader._discover_korea_release_links")
+    def test_keeps_motir_monthly_when_kcs_discovery_times_out(
+        self,
+        mock_kcs_discover,
+        mock_monthly_discover,
+        mock_download,
+        mock_sleep,
+    ) -> None:
+        mock_kcs_discover.side_effect = requests.ConnectTimeout("KCS timeout")
+        mock_monthly_discover.return_value = "https://official.example/monthly"
+        mock_download.return_value = """
+        <h1>2026년 8월 수출입동향</h1>
+        <p>등록일 2026-09-01</p>
+        <p>반도체 수출(466.5억 달러, +209.0%)</p>
+        """
+
+        frame = load_korea_semiconductor_exports.__wrapped__()
+
+        official = frame[~frame["is_derived"]]
+        self.assertEqual(
+            list(official["series_id"]),
+            ["korea_semiconductor_exports_monthly"],
+        )
+        self.assertEqual(frame.attrs["missing_periods"], ["1_10", "1_20"])
+        self.assertIn("KCS timeout", frame.attrs["load_warnings"][0])
+
+    @patch("data_loader._download_text")
+    @patch("data_loader._discover_korea_monthly_trade_release")
+    @patch("data_loader._discover_korea_release_links")
+    def test_replaces_stale_kcs_monthly_with_current_motir_monthly(
+        self, mock_kcs_discover, mock_monthly_discover, mock_download
+    ) -> None:
+        mock_kcs_discover.return_value = [
+            ("1-20", "https://official.example/20"),
+            ("monthly-old", "https://official.example/monthly-old"),
+        ]
+        mock_monthly_discover.return_value = "https://official.example/monthly-current"
+        bodies = {
+            "https://official.example/20": (
+                "<h1>2026년 8월 1일 ~ 8월 20일 수출입 현황 [잠정치]</h1>"
+                "<p>반도체(260억 달러)</p>"
+            ),
+            "https://official.example/monthly-old": (
+                "<h1>2026년 7월 수출입 현황 [확정치]</h1>"
+                "<p>반도체 수출(412억 달러)</p>"
+            ),
+            "https://official.example/monthly-current": (
+                "<h1>2026년 8월 수출입동향</h1>"
+                "<p>등록일 2026-09-01</p>"
+                "<p>반도체 수출(466.5억 달러, +209.0%)</p>"
+            ),
+        }
+        mock_download.side_effect = lambda url: bodies[url]
+
+        frame = load_korea_semiconductor_exports.__wrapped__()
+
+        monthly = frame[
+            frame["series_id"] == "korea_semiconductor_exports_monthly"
+        ].iloc[0]
+        self.assertEqual(monthly["reference_period"], pd.Timestamp("2026-08-01"))
+        self.assertEqual(monthly["value"], 46_650)
+        self.assertEqual(monthly["source_name"], "韓国産業通商部 輸出入動向")
+
     @patch("data_loader.requests.get")
     def test_discovers_current_kcs_data_attribute_link(self, mock_get) -> None:
         rss = """<?xml version="1.0" encoding="UTF-8"?>
