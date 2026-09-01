@@ -180,6 +180,68 @@ def parse_korea_customs_release(
     return pd.DataFrame(rows, columns=SEMICONDUCTOR_DATA_COLUMNS)
 
 
+def parse_korea_monthly_trade_release(
+    html: str,
+    source_url: str,
+    fetched_at: pd.Timestamp,
+) -> pd.DataFrame:
+    """産業通商部の月次輸出入動向から半導体輸出額と前年比を抽出する。"""
+    text = _html_to_text(html)
+    period_match = re.search(
+        r"(20\d{2})\s*년\s*(\d{1,2})\s*월\s*수출입\s*동향", text
+    )
+    # 見出しの整数丸め値より、本文の括弧付き詳細値を優先する。
+    amount_match = re.search(
+        r"반도체\s*수출(?:은|이)?\s*\(\s*"
+        r"([0-9]+(?:\.[0-9]+)?)\s*억\s*(?:달러|불)",
+        text,
+    ) or re.search(
+        r"반도체\s*수출(?:은|이)?\s*"
+        r"([0-9]+(?:\.[0-9]+)?)\s*억\s*(?:달러|불)",
+        text,
+    )
+    yoy_match = re.search(
+        r"반도체\s*수출(?:은|이)?\s*"
+        r"(?:\([^)]*?[,，]\s*)?([△▲+\-−]?\s*[0-9]+(?:\.[0-9]+)?)\s*%",
+        text,
+    )
+    if period_match is None or amount_match is None:
+        raise ValueError("韓国産業通商部発表から月次半導体輸出を特定できません。")
+
+    year, month = map(int, period_match.groups())
+    period_start = pd.Timestamp(year=year, month=month, day=1)
+    release_match = re.search(
+        r"등록일\s*(20\d{2})[.\-/](\d{1,2})[.\-/](\d{1,2})", text
+    )
+    release_date = (
+        pd.Timestamp(*map(int, release_match.groups())) if release_match else pd.NaT
+    )
+    row = {
+        "region": "Korea",
+        "series_id": "korea_semiconductor_exports_monthly",
+        "series_name": "韓国 半導体輸出（月次）",
+        "reference_period": period_start,
+        "release_date": release_date,
+        "value": float(amount_match.group(1)) * 100,
+        "unit": "million USD",
+        "yoy": _parse_signed_number(yoy_match.group(1)) if yoy_match else None,
+        "frequency": "monthly",
+        "source_name": "韓国産業通商部 輸出入動向",
+        "source_url": source_url,
+        "publication_stage": "preliminary_monthly",
+        "is_partial_period": False,
+        "period_start": period_start,
+        "period_end": period_start + pd.offsets.MonthEnd(0),
+        "working_days": None,
+        "fetched_at": fetched_at,
+        "currency": "USD",
+        "is_derived": False,
+        "data_vintage": "preliminary_monthly",
+        "yoy_is_derived": False,
+    }
+    return pd.DataFrame([row], columns=SEMICONDUCTOR_DATA_COLUMNS)
+
+
 def summarize_global_demand(frame: pd.DataFrame) -> pd.DataFrame:
     """各系列の最新値、前年比、平滑化トレンドを返す。"""
     rows: list[dict[str, object]] = []

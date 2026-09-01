@@ -163,7 +163,11 @@ def _render_korea_exports(frame: pd.DataFrame) -> None:
         st.caption("営業日調整値なし：前年同期を含む公式営業日数が揃わないため推計していません。")
     latest = official.iloc[-1]
     st.caption(f"最新対象期間: {latest['period_start']:%Y-%m-%d}〜{latest['period_end']:%Y-%m-%d}｜公表日: {_format_date(latest['release_date'])}｜取得日時: {_format_timestamp(latest['fetched_at'])}。輸出金額は数量×価格であり、数量需要だけを示しません。速報値は月次確報ではありません。")
-    st.markdown(f"データ出所: [韓国関税庁 輸出入現況]({latest['source_url']})")
+    sources = official[["source_name", "source_url"]].drop_duplicates()
+    source_links = " / ".join(
+        f"[{row.source_name}]({row.source_url})" for row in sources.itertuples()
+    )
+    st.markdown(f"データ出所: {source_links}")
 
 
 def _market_direction(snapshot: pd.DataFrame, name: str) -> dict[str, object]:

@@ -16,6 +16,7 @@ import yfinance as yf
 
 from global_semiconductor_demand import (
     parse_korea_customs_release,
+    parse_korea_monthly_trade_release,
     parse_taiwan_export_orders_csv,
 )
 
@@ -69,6 +70,7 @@ KOREA_CUSTOMS_RSS_URL = (
     "http://www.customs.go.kr/kcs/selectBoardRss.do?mi=15265&bbsId=1362"
 )
 KOREA_CUSTOMS_BASE_URL = "http://www.customs.go.kr"
+KOREA_MOTIR_PRESS_URL = "https://www.motir.go.kr/"
 LoadResult = TypeVar("LoadResult")
 
 
@@ -326,13 +328,28 @@ def load_korea_semiconductor_exports() -> pd.DataFrame:
     found: dict[str, pd.DataFrame] = {}
     failures: list[str] = []
     article_attempts = 0
-    for title, url in article_links:
+    for candidate in article_links:
         if len(found) == 3:
             break
+        title, url, embedded_html = (
+            (*candidate, None) if len(candidate) == 2 else candidate
+        )
         try:
-            html, attempts = _load_with_retry(lambda target=url: _download_text(target))
-            article_attempts += attempts
-            parsed = parse_korea_customs_release(html, url, fetched_at)
+            parsed = None
+            if embedded_html:
+                try:
+                    parsed = parse_korea_customs_release(
+                        f"<h1>{title}</h1>{embedded_html}", url, fetched_at
+                    )
+                except (ValueError, DataSchemaError):
+                    # RSS本文が要約だけの場合は、公式記事ページを取得して再試行する。
+                    pass
+            if parsed is None:
+                html, attempts = _load_with_retry(
+                    lambda target=url: _download_text(target)
+                )
+                article_attempts += attempts
+                parsed = parse_korea_customs_release(html, url, fetched_at)
         except Exception as error:
             failures.append(f"{title}: {error}")
             continue
@@ -340,6 +357,21 @@ def load_korea_semiconductor_exports() -> pd.DataFrame:
         kind = str(primary["series_id"]).removeprefix("korea_semiconductor_exports_")
         if kind in {"1_10", "1_20", "monthly"} and kind not in found:
             found[kind] = parsed
+    if "monthly" not in found:
+        try:
+            monthly_url, discovery_attempts_extra = _load_with_retry(
+                _discover_korea_monthly_trade_release
+            )
+            discovery_attempts += discovery_attempts_extra
+            monthly_html, attempts = _load_with_retry(
+                lambda: _download_text(monthly_url)
+            )
+            article_attempts += attempts
+            found["monthly"] = parse_korea_monthly_trade_release(
+                monthly_html, monthly_url, fetched_at
+            )
+        except Exception as error:
+            failures.append(f"韓国産業通商部 月次輸出入動向: {error}")
     missing = [kind for kind in ("1_10", "1_20", "monthly") if kind not in found]
     if not found:
         detail = " / ".join(failures[:3])
@@ -381,7 +413,7 @@ def _download_text(url: str) -> str:
     return response.text
 
 
-def _discover_korea_release_links() -> list[tuple[str, str]]:
+def _discover_korea_release_links() -> list[tuple[str, str, str | None]]:
     """関税庁の検索結果から半導体速報・月次発表候補を新しい順に返す。"""
     from html.parser import HTMLParser
     from urllib.parse import urljoin
@@ -398,6 +430,15 @@ def _discover_korea_release_links() -> list[tuple[str, str]]:
             if tag.lower() != "a":
                 return
             attributes = dict(attrs)
+            article_id = attributes.get("data-id")
+            article_token = attributes.get("data-url")
+            if article_id and article_token:
+                self.href = (
+                    "/kcs/na/ntt/selectNttInfo.do?mi=2891&bbsId=1362"
+                    f"&nttSn={article_id}&nttSnUrl={article_token}"
+                )
+                self.parts = []
+                return
             href = attributes.get("href")
             if href and "selectNttInfo" in href:
                 self.href = href
@@ -425,7 +466,7 @@ def _discover_korea_release_links() -> list[tuple[str, str]]:
                 self.href = None
                 self.parts = []
 
-    collected: list[tuple[str, str]] = []
+    collected: list[tuple[str, str, str | None]] = []
     seen: set[str] = set()
     rss_response = requests.get(
         KOREA_CUSTOMS_RSS_URL, headers=METI_REQUEST_HEADERS, timeout=20
@@ -438,17 +479,26 @@ def _discover_korea_release_links() -> list[tuple[str, str]]:
     for item in root.findall(".//item"):
         title = " ".join((item.findtext("title") or "").split())
         url = (item.findtext("link") or "").strip()
+        description = item.findtext("description") or ""
         if _korea_release_title_kind(title) and url and url not in seen:
             seen.add(url)
-            collected.append((title, url))
+            # 新しい記事ではRSSリンクから本文が返らない場合があるため、
+            # 公式RSSに埋め込まれた記事本文も候補とともに保持する。
+            collected.append((title, url, description))
 
     if _has_all_korea_release_kinds(collected):
         return collected
 
-    for page_index in range(2, 4):
+    # RSSは最新記事を一定件数しか返さないため、同じ月の1–10日速報が
+    # 既にフィード外でも拾えるよう一覧の1ページ目から確認する。
+    for page_index in range(1, 4):
         response = requests.get(
             KOREA_CUSTOMS_LIST_URL,
-            params={"pageIndex": page_index},
+            params={
+                "pageIndex": page_index,
+                "searchType": "sj",
+                "searchValue": "수출입 현황",
+            },
             headers=METI_REQUEST_HEADERS,
             timeout=20,
         )
@@ -459,7 +509,7 @@ def _discover_korea_release_links() -> list[tuple[str, str]]:
             if not _korea_release_title_kind(title) or url in seen:
                 continue
             seen.add(url)
-            collected.append((title, url))
+            collected.append((title, url, None))
         if _has_all_korea_release_kinds(collected):
             break
     if not collected:
@@ -467,8 +517,56 @@ def _discover_korea_release_links() -> list[tuple[str, str]]:
     return collected
 
 
-def _has_all_korea_release_kinds(links: list[tuple[str, str]]) -> bool:
-    return {kind for title, _ in links if (kind := _korea_release_title_kind(title))} == {
+def _discover_korea_monthly_trade_release() -> str:
+    """産業通商部の一覧から最新の月次輸出入動向URLを返す。"""
+    from html.parser import HTMLParser
+    from urllib.parse import urljoin
+
+    class MonthlyLinkParser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.href: str | None = None
+            self.parts: list[str] = []
+            self.links: list[tuple[str, str]] = []
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag.lower() != "a":
+                return
+            href = dict(attrs).get("href")
+            if href and "/kor/article/ATCL3f49a5a8c/" in href and href.endswith("/view"):
+                self.href = href
+                self.parts = []
+
+        def handle_data(self, data: str) -> None:
+            if self.href is not None:
+                self.parts.append(data)
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag.lower() == "a" and self.href is not None:
+                self.links.append((" ".join("".join(self.parts).split()), self.href))
+                self.href = None
+                self.parts = []
+
+    response = requests.get(
+        KOREA_MOTIR_PRESS_URL, headers=METI_REQUEST_HEADERS, timeout=20
+    )
+    response.raise_for_status()
+    parser = MonthlyLinkParser()
+    parser.feed(response.text)
+    for title, href in parser.links:
+        if re.search(r"20\d{2}년\s*\d{1,2}월\s*수출입\s*동향", title):
+            return urljoin(KOREA_MOTIR_PRESS_URL, href)
+    raise DataUnavailableError("韓国産業通商部の最新月次輸出入動向を取得できません。")
+
+
+def _has_all_korea_release_kinds(
+    links: list[tuple[str, str] | tuple[str, str, str | None]],
+) -> bool:
+    return {
+        kind
+        for candidate in links
+        if (kind := _korea_release_title_kind(candidate[0]))
+    } == {
         "1_10",
         "1_20",
         "monthly",

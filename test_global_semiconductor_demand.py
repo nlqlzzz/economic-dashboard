@@ -5,12 +5,32 @@ import pandas as pd
 from global_semiconductor_demand import (
     classify_demand_direction,
     parse_korea_customs_release,
+    parse_korea_monthly_trade_release,
     parse_taiwan_export_orders_csv,
     summarize_global_demand,
 )
 
 
 class GlobalSemiconductorDemandTest(unittest.TestCase):
+    def test_parses_official_motir_monthly_semiconductor_exports(self) -> None:
+        html = """
+        <h1>2026년 8월 수출입동향</h1>
+        <p>등록일 2026-09-01</p>
+        <p>반도체 수출 467억 달러로 역대 최대 기록 경신</p>
+        <p>반도체 수출(466.5억 달러, +209.0%)은 역대 최대 기록을 경신했다.</p>
+        """
+
+        frame = parse_korea_monthly_trade_release(
+            html, "https://official.example/monthly", pd.Timestamp("2026-09-02")
+        )
+
+        row = frame.iloc[0]
+        self.assertEqual(row["series_id"], "korea_semiconductor_exports_monthly")
+        self.assertEqual(row["value"], 46_650)
+        self.assertEqual(row["yoy"], 209.0)
+        self.assertEqual(row["release_date"], pd.Timestamp("2026-09-01"))
+        self.assertFalse(row["is_partial_period"])
+
     def test_parses_taiwan_orders_and_keeps_release_date_unknown(self) -> None:
         lines = ["統計項目,貨品別,資料期(民國年),統計值(金額),計量單位"]
         for year in (112, 113):
