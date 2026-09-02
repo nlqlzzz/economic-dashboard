@@ -11,6 +11,7 @@ from data_loader import (
     RetryFailure,
     _download_estat_electronic_computer_orders,
     _discover_korea_monthly_trade_release,
+    _discover_korea_monthly_trade_releases,
     _discover_korea_release_links,
     _korea_release_title_kind,
     _parse_meti_iip_workbook,
@@ -18,6 +19,8 @@ from data_loader import (
     _load_with_retry,
     load_indicator_data,
     load_korea_semiconductor_exports,
+    load_korea_semiconductor_monthly_history,
+    merge_korea_semiconductor_exports,
 )
 
 
@@ -229,6 +232,23 @@ class EstatElectronicComputerOrdersParserTest(unittest.TestCase):
 
 
 class KoreaSemiconductorLoaderTest(unittest.TestCase):
+    @patch("data_loader._discover_korea_monthly_trade_releases")
+    @patch("data_loader.requests.get")
+    def test_discovers_latest_motir_release_from_javascript_archive(
+        self, mock_get, mock_archive
+    ) -> None:
+        empty = unittest.mock.Mock(text="<html>no direct monthly link</html>")
+        empty.raise_for_status.return_value = None
+        mock_get.return_value = empty
+        mock_archive.return_value = [
+            ("2026년 7월 정보통신산업(ICT) 수출입 동향", "https://official.example/ict"),
+            ("2026년 8월 수출입동향", "https://official.example/general"),
+        ]
+
+        url = _discover_korea_monthly_trade_release()
+
+        self.assertEqual(url, "https://official.example/general")
+
     @patch("data_loader.time.sleep")
     @patch("data_loader._download_text")
     @patch("data_loader._discover_korea_monthly_trade_release")
@@ -537,6 +557,111 @@ class RetryBehaviorTest(unittest.TestCase):
         pd.testing.assert_series_equal(series, expected)
         self.assertEqual(attempts, 2)
         mock_sleep.assert_called_once()
+
+    @patch("data_loader.requests.get")
+    def test_discovers_motir_monthly_archive_javascript_links(self, mock_get) -> None:
+        response = unittest.mock.Mock(
+            text="""
+            <a href="javascript:article.view('163769');"><i>2021년 1월 수출입 동향</i></a>
+            <a href="javascript:article.view('169932');"><i>2024년 11월 정보통신산업(ICT) 수출입 동향</i></a>
+            <a href="javascript:article.view('172145');"><i>2026년 8월 수출입동향</i></a>
+            """
+        )
+        response.raise_for_status.return_value = None
+        mock_get.return_value = response
+
+        links = _discover_korea_monthly_trade_releases("2021-01-01")
+
+        self.assertEqual(len(links), 3)
+        self.assertEqual(links[0][1], "https://www.motir.go.kr/kor/article/ATCL3f49a5a8c/163769/view")
+        self.assertIn("169932", links[1][1])
+        self.assertIn("172145", links[2][1])
+
+    @patch("data_loader._download_text")
+    @patch("data_loader._discover_korea_monthly_trade_releases")
+    def test_loads_monthly_history_with_official_yoy_and_release_dates(
+        self, mock_discover, mock_download
+    ) -> None:
+        first_url = "https://official.example/2021-01"
+        second_url = "https://official.example/2026-08"
+        mock_discover.return_value = [
+            ("2021년 1월 수출입 동향", first_url),
+            ("2026년 8월 수출입동향", second_url),
+        ]
+        bodies = {
+            first_url: """
+                <h1>2021년 1월 수출입 동향</h1><p>등록일 2021-02-01</p>
+                <p>반도체 수출(87.2억 달러, +21.7%)은 7개월 연속 증가했다.</p>
+            """,
+            second_url: """
+                <h1>2026년 8월 수출입동향</h1><p>등록일 2026-09-01</p>
+                <p>반도체 수출(466.5억 달러, +209.0%)은 역대 최대였다.</p>
+            """,
+        }
+        mock_download.side_effect = lambda url: bodies[url]
+
+        frame = load_korea_semiconductor_monthly_history.__wrapped__()
+
+        self.assertEqual(len(frame), 2)
+        self.assertEqual(frame.iloc[0]["reference_period"], pd.Timestamp("2021-01-01"))
+        self.assertEqual(frame.iloc[0]["release_date"], pd.Timestamp("2021-02-01"))
+        self.assertEqual(frame.iloc[0]["yoy"], 21.7)
+        self.assertFalse(frame["yoy_is_derived"].any())
+        self.assertEqual(frame.attrs["loaded_release_count"], 2)
+
+    @patch("data_loader._download_text")
+    @patch("data_loader._discover_korea_monthly_trade_releases")
+    def test_monthly_history_prefers_structured_ict_releases(
+        self, mock_discover, mock_download
+    ) -> None:
+        ict_url = "https://official.example/ict"
+        mock_discover.return_value = [
+            ("2024년 11월 수출입 동향", "https://official.example/general"),
+            ("2024년 11월 정보통신산업(ICT) 수출입 동향", ict_url),
+        ]
+        mock_download.return_value = """
+            <h1>2024년 11월 정보통신산업(ICT) 수출입 동향</h1>
+            <p>등록일 2024-12-16</p>
+            <p>○ (반도체 : 124.6 억불, 30.3%↑)</p>
+        """
+
+        frame = load_korea_semiconductor_monthly_history.__wrapped__()
+
+        mock_download.assert_called_once_with(ict_url)
+        self.assertEqual(frame.attrs["discovered_release_count"], 2)
+        self.assertEqual(frame.attrs["requested_release_count"], 1)
+
+    def test_merges_monthly_history_with_partial_current_data(self) -> None:
+        base = {
+            "region": "Korea", "series_name": "Korea", "unit": "million USD",
+            "frequency": "monthly", "source_name": "official", "source_url": "url",
+            "publication_stage": "preliminary_monthly", "working_days": None,
+            "currency": "USD", "is_derived": False, "data_vintage": "preliminary_monthly",
+            "yoy_is_derived": False, "fetched_at": pd.Timestamp("2026-09-02"),
+        }
+        history = pd.DataFrame([
+            {**base, "series_id": "korea_semiconductor_exports_monthly",
+             "reference_period": pd.Timestamp("2026-07-01"), "release_date": pd.Timestamp("2026-08-01"),
+             "value": 41000.0, "yoy": 100.0, "is_partial_period": False,
+             "period_start": pd.Timestamp("2026-07-01"), "period_end": pd.Timestamp("2026-07-31")},
+        ])
+        latest = pd.DataFrame([
+            {**base, "series_id": "korea_semiconductor_exports_1_20",
+             "reference_period": pd.Timestamp("2026-08-01"), "release_date": pd.Timestamp("2026-08-21"),
+             "value": 26000.0, "yoy": 25.0, "is_partial_period": True,
+             "period_start": pd.Timestamp("2026-08-01"), "period_end": pd.Timestamp("2026-08-20")},
+            {**base, "series_id": "korea_semiconductor_exports_monthly",
+             "reference_period": pd.Timestamp("2026-08-01"), "release_date": pd.Timestamp("2026-09-01"),
+             "value": 46650.0, "yoy": None, "is_partial_period": False,
+             "period_start": pd.Timestamp("2026-08-01"), "period_end": pd.Timestamp("2026-08-31")},
+        ])
+
+        result = merge_korea_semiconductor_exports(latest, history)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result.attrs["monthly_history_count"], 1)
+        self.assertEqual(result.attrs["monthly_history_start"], pd.Timestamp("2026-07-01"))
+        self.assertEqual(result.attrs["excluded_incomplete_monthly"], 1)
 
     @patch("data_loader.time.sleep")
     def test_retries_server_error_but_not_client_error(self, mock_sleep) -> None:
