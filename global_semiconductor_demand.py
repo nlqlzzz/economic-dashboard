@@ -326,6 +326,164 @@ def classify_demand_direction(summary: pd.DataFrame, region: str) -> dict[str, o
     return {"status": status, "direction": direction, "evidence": evidence}
 
 
+PULSE_STATES = ("Strong", "Improving", "Mixed", "Weakening", "Unavailable")
+
+
+def assess_regional_pulse(
+    summary: pd.DataFrame,
+    region: str,
+    japan_inputs: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    """地域の役割に応じた説明可能なPulse判定を返す。"""
+    if region == "Japan":
+        observations = japan_inputs or []
+    else:
+        selected = summary[summary["region"] == region] if not summary.empty else summary
+        observations = _regional_observations(selected, region)
+
+    positive = [item for item in observations if item.get("direction") == "positive"]
+    negative = [item for item in observations if item.get("direction") == "negative"]
+    missing = [item for item in observations if item.get("direction") == "missing"]
+    usable = positive + negative
+    if not usable:
+        state = "Unavailable"
+    elif len(positive) >= 2 and not negative:
+        state = "Strong"
+    elif len(negative) >= 2 and not positive:
+        state = "Weakening"
+    elif len(positive) > len(negative):
+        state = "Improving"
+    elif len(negative) > len(positive):
+        state = "Weakening"
+    else:
+        state = "Mixed"
+    return {
+        "region": region,
+        "state": state,
+        "direction": _state_direction(state),
+        "contributors_positive": [str(item["label"]) for item in positive],
+        "contributors_negative": [str(item["label"]) for item in negative],
+        "contributors_missing": [str(item["label"]) for item in missing],
+        "observations_used": usable,
+        "reason": _regional_reason(region, state, positive, negative),
+    }
+
+
+def build_japan_pulse_inputs(
+    iip_summary: pd.DataFrame,
+    machinery_summary: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    """既存の日本集計結果を共通Pulse入力へ薄く変換する。"""
+    observations: list[dict[str, object]] = []
+    for indicator in ("出荷", "生産", "在庫", "在庫率"):
+        selected = iip_summary[iip_summary["指標"] == indicator] if not iip_summary.empty else iip_summary
+        value = None if selected.empty else pd.to_numeric(selected.iloc[0].get("前年同月比"), errors="coerce")
+        if pd.isna(value):
+            direction = "missing"
+        elif indicator in {"在庫", "在庫率"}:
+            direction = "positive" if float(value) < 0 else "negative" if float(value) > 0 else "missing"
+        else:
+            direction = "positive" if float(value) > 0 else "negative" if float(value) < 0 else "missing"
+        observations.append(
+            {"label": f"日本{indicator}前年比", "value": None if pd.isna(value) else float(value), "direction": direction}
+        )
+    machinery_value = pd.to_numeric(
+        (machinery_summary or {}).get("3か月移動平均前年比"), errors="coerce"
+    )
+    observations.append(
+        {
+            "label": "日本電子計算機等受注3か月平均前年比",
+            "value": None if pd.isna(machinery_value) else float(machinery_value),
+            "direction": (
+                "missing" if pd.isna(machinery_value) else "positive" if float(machinery_value) > 0 else "negative" if float(machinery_value) < 0 else "missing"
+            ),
+        }
+    )
+    return observations
+
+
+def combine_global_pulse(region_results: dict[str, dict[str, object]]) -> dict[str, object]:
+    """最低2地域を原則として地域判定をGlobalへ統合する。"""
+    valid = {
+        region: result
+        for region, result in region_results.items()
+        if result.get("state") in {"Strong", "Improving", "Mixed", "Weakening"}
+    }
+    coverage = len(valid)
+    if coverage < 2:
+        state = "Unavailable"
+        reason = "有効データが1地域以下のため、Global判定を行いません。"
+    else:
+        scores = {"Strong": 2, "Improving": 1, "Mixed": 0, "Weakening": -1}
+        average = sum(scores[str(result["state"])] for result in valid.values()) / coverage
+        if average >= 2:
+            state = "Strong"
+        elif average > 0:
+            state = "Improving"
+        elif average < -0.5:
+            state = "Weakening"
+        else:
+            state = "Mixed"
+        reason = " / ".join(f"{region}: {result['state']}" for region, result in valid.items())
+    return {
+        "state": state,
+        "direction": _state_direction(state),
+        "coverage": coverage,
+        "coverage_total": 3,
+        "coverage_label": f"3地域中{coverage}地域で判定" if coverage >= 2 else "Limited Data",
+        "regions": region_results,
+        "contributors_positive": [region for region, result in valid.items() if result["state"] in {"Strong", "Improving"}],
+        "contributors_negative": [region for region, result in valid.items() if result["state"] == "Weakening"],
+        "contributors_missing": [region for region in ("Taiwan", "Korea", "Japan") if region not in valid],
+        "reason": reason,
+    }
+
+
+def _regional_observations(selected: pd.DataFrame, region: str) -> list[dict[str, object]]:
+    observations: list[dict[str, object]] = []
+    if selected.empty:
+        return [{"label": f"{region} data", "direction": "missing", "value": None}]
+    rows = selected.copy()
+    if region == "Korea":
+        monthly = rows[rows["series_id"].eq("korea_semiconductor_exports_monthly")]
+        partial_20 = rows[rows["series_id"].eq("korea_semiconductor_exports_1_20")]
+        partial_10 = rows[rows["series_id"].eq("korea_semiconductor_exports_1_10")]
+        rows = pd.concat([monthly, partial_20 if not partial_20.empty else partial_10])
+    for _, row in rows.iterrows():
+        yoy = pd.to_numeric(row.get("yoy"), errors="coerce")
+        trend = pd.to_numeric(row.get("three_month_average_yoy"), errors="coerce")
+        momentum = pd.to_numeric(row.get("six_month_momentum"), errors="coerce")
+        label = str(row.get("series_name", row.get("series_id", "series")))
+        if pd.notna(trend):
+            direction = "positive" if float(yoy) > float(trend) else "negative" if float(yoy) < float(trend) else "missing"
+            basis = "YoY vs 3か月平均YoY"
+        elif pd.notna(yoy):
+            direction = "positive" if float(yoy) > 0 else "negative" if float(yoy) < 0 else "missing"
+            basis = "YoY"
+        elif pd.notna(momentum):
+            direction = "positive" if float(momentum) > 0 else "negative" if float(momentum) < 0 else "missing"
+            basis = "3〜6か月モメンタム"
+        else:
+            direction, basis = "missing", "判定値なし"
+        observations.append({"label": label, "value": None if pd.isna(yoy) else float(yoy), "direction": direction, "basis": basis})
+    return observations
+
+
+def _state_direction(state: str) -> str:
+    return "↑" if state in {"Strong", "Improving"} else "↓" if state == "Weakening" else "→"
+
+
+def _regional_reason(
+    region: str,
+    state: str,
+    positive: list[dict[str, object]],
+    negative: list[dict[str, object]],
+) -> str:
+    if state == "Unavailable":
+        return f"{region}の判定に必要な系列がありません。"
+    return f"改善{len(positive)}系列、悪化{len(negative)}系列に基づく判定です。"
+
+
 def _parse_taiwan_period(value: object) -> pd.Timestamp | None:
     digits = re.sub(r"\D", "", str(value)).zfill(5)
     if len(digits) != 5:

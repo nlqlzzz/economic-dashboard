@@ -4,7 +4,21 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from global_semiconductor_demand import classify_demand_direction, summarize_global_demand
+from global_semiconductor_demand import (
+    assess_regional_pulse,
+    build_japan_pulse_inputs,
+    classify_demand_direction,
+    combine_global_pulse,
+    summarize_global_demand,
+)
+from semiconductor_validation import (
+    add_global_condition_signals,
+    analyze_release_aware_correlation,
+    analyze_release_aware_returns,
+    build_overseas_validation_signals,
+    calculate_market_momentum,
+    classify_price_vs_fundamentals,
+)
 from theme_view import build_theme_snapshot
 
 
@@ -74,6 +88,140 @@ def render_semiconductor_market_compact(
     )
     display["データ日"] = display["データ日"].dt.strftime("%Y-%m-%d")
     st.dataframe(display.drop(columns="変化単位"), hide_index=True, width="stretch")
+
+
+def build_current_global_pulse(
+    taiwan_data: pd.DataFrame,
+    korea_data: pd.DataFrame,
+    japan_iip_summary: pd.DataFrame,
+    machinery_summary: dict[str, object] | None,
+) -> dict[str, object]:
+    summary = summarize_global_demand(pd.concat([taiwan_data, korea_data], ignore_index=True))
+    regions = {
+        "Taiwan": assess_regional_pulse(summary, "Taiwan"),
+        "Korea": assess_regional_pulse(summary, "Korea"),
+        "Japan": assess_regional_pulse(
+            summary,
+            "Japan",
+            build_japan_pulse_inputs(japan_iip_summary, machinery_summary),
+        ),
+    }
+    return combine_global_pulse(regions)
+
+
+def render_global_semiconductor_pulse(pulse: dict[str, object]) -> None:
+    st.markdown("#### Global Semiconductor Demand Pulse")
+    state = str(pulse.get("state", "Unavailable"))
+    label = "Unavailable / Limited Data" if state == "Unavailable" else state
+    st.metric("Global Semiconductor Demand", f"{pulse.get('direction', '→')} {label}")
+    st.caption(str(pulse.get("coverage_label", "Limited Data")))
+    columns = st.columns(3)
+    for column, region in zip(columns, ("Taiwan", "Korea", "Japan")):
+        result = pulse.get("regions", {}).get(region, {"state": "Unavailable", "direction": "→"})
+        column.metric(region, f"{result.get('direction', '→')} {result.get('state', 'Unavailable')}")
+    st.write(str(pulse.get("reason", "判定に必要なデータがありません。")))
+    with st.expander("Global Pulseの判定根拠を見る"):
+        for region in ("Taiwan", "Korea", "Japan"):
+            result = pulse.get("regions", {}).get(region, {})
+            st.markdown(f"**{region}: {result.get('state', 'Unavailable')}**")
+            positives = result.get("contributors_positive", [])
+            negatives = result.get("contributors_negative", [])
+            missing = result.get("contributors_missing", [])
+            st.caption(
+                f"改善: {', '.join(positives) or 'なし'}｜悪化: {', '.join(negatives) or 'なし'}｜欠損: {', '.join(missing) or 'なし'}"
+            )
+    st.caption("0〜100の総合スコアではありません。利用できた地域と系列の方向を説明可能なルールで統合しています。")
+
+
+def render_price_vs_fundamentals(
+    sox_prices: pd.Series | None,
+    pulse: dict[str, object],
+) -> dict[str, object]:
+    market = calculate_market_momentum(
+        pd.Series(dtype=float) if sox_prices is None else sox_prices
+    )
+    result = classify_price_vs_fundamentals(market, pulse)
+    st.markdown("#### Price vs Fundamentals")
+    st.metric("SOX × Global Demand", str(result["state"]))
+    st.write(str(result["message"]))
+    returns = market.get("returns", {})
+    columns = st.columns(3)
+    for column, months in zip(columns, (1, 3, 6)):
+        value = returns.get(months)
+        column.metric(f"SOX {months}か月", "—" if value is None else f"{value:+.1f}%")
+    with st.expander("株価と実需の根拠を見る"):
+        for region, region_result in pulse.get("regions", {}).items():
+            observations = region_result.get("observations_used", [])
+            st.markdown(f"**{region}: {region_result.get('state', 'Unavailable')}**")
+            for observation in observations:
+                value = observation.get("value")
+                value_text = "—" if value is None else f"{float(value):+.1f}%"
+                st.caption(f"{observation.get('label')}: {value_text}（{observation.get('basis', '前年比')}）")
+    st.caption("同方向・乖離を整理する説明表示で、割安・バブル・売買判断を示しません。")
+    return result
+
+
+def render_overseas_historical_validation(
+    overseas_data: pd.DataFrame,
+    asset_prices: dict[str, pd.Series],
+) -> None:
+    st.markdown("##### 海外統計の公表日基準検証")
+    strict = build_overseas_validation_signals(overseas_data, strict=True)
+    provisional = build_overseas_validation_signals(overseas_data, strict=False)
+    if not strict.empty and asset_prices:
+        st.markdown("###### 厳密検証（実際のrelease_dateのみ）")
+        _render_validation_controls(strict, asset_prices, "strict")
+    else:
+        st.info("厳密検証に利用できる公表日付き月次履歴が不足しています。速報は長期検証へ使用しません。")
+    with st.expander("暫定検証を見る（推定利用可能日・改定後データ）"):
+        st.warning("暫定検証：公表日不明の観測には対象月の2か月後月初を利用可能日として付与しています。公式公表日ではなく、厳密検証と混在させていません。")
+        if provisional.empty or not asset_prices:
+            st.caption("暫定検証に利用できる履歴がありません。")
+        else:
+            _render_validation_controls(provisional, asset_prices, "provisional")
+
+
+def _render_validation_controls(
+    signals: pd.DataFrame,
+    asset_prices: dict[str, pd.Series],
+    key_suffix: str,
+) -> None:
+    st.caption(
+        f"利用可能日: {signals.index.min():%Y-%m-%d}〜{signals.index.max():%Y-%m-%d}｜"
+        f"利用可能日数: {len(signals)}"
+    )
+    signal_name = st.selectbox("経済指標", list(signals), key=f"overseas_validation_signal_{key_suffix}")
+    asset_name = st.selectbox("市場系列", list(asset_prices), key=f"overseas_validation_asset_{key_suffix}")
+    signal = pd.to_numeric(signals[signal_name], errors="coerce")
+    correlation = analyze_release_aware_correlation(signal, asset_prices[asset_name])
+    correlation_display = correlation.copy()
+    correlation_display["相関"] = correlation_display["相関"].map(
+        lambda value: "—" if pd.isna(value) else f"{float(value):+.2f}"
+    )
+    st.markdown("**公表後リード・ラグ相関**")
+    st.dataframe(correlation_display, hide_index=True, width="stretch")
+    conditions = {
+        f"{signal_name}: YoY > 0": signal > 0,
+        f"{signal_name}: YoYが前回より改善": signal > signal.shift(1),
+        f"{signal_name}: YoY > +20%": signal > 20,
+    }
+    enriched = add_global_condition_signals(signals)
+    for condition_name in (
+        "Taiwan Improving",
+        "Korea Improving",
+        "Taiwan AND Korea Improving",
+        "Taiwan AND Korea AND Japan Improving",
+    ):
+        if condition_name in enriched:
+            conditions[condition_name] = enriched[condition_name]
+    condition_name = st.selectbox("条件", list(conditions), key=f"overseas_validation_condition_{key_suffix}")
+    result = analyze_release_aware_returns(conditions[condition_name], asset_prices[asset_name])
+    display = result.copy()
+    for column in ("平均", "中央値", "上昇確率", "25%点", "75%点", "最悪値", "最良値"):
+        display[column] = display[column].map(lambda value: "—" if pd.isna(value) else f"{value:+.1f}%")
+    st.dataframe(display[["期間", "平均", "中央値", "上昇確率", "サンプル数", "注意"]], hide_index=True, width="stretch")
+    with st.expander("分布の詳細を見る"):
+        st.dataframe(display[["期間", "25%点", "75%点", "最悪値", "最良値", "サンプル数"]], hide_index=True, width="stretch")
 
 
 def render_global_demand(
