@@ -71,6 +71,9 @@ KOREA_CUSTOMS_RSS_URL = (
 )
 KOREA_CUSTOMS_BASE_URL = "https://www.customs.go.kr"
 KOREA_MOTIR_PRESS_URL = "https://www.motir.go.kr/"
+KOREA_MOTIR_PRESS_LIST_URL = (
+    "https://www.motir.go.kr/kor/article/ATCL3f49a5a8c"
+)
 LoadResult = TypeVar("LoadResult")
 
 
@@ -368,12 +371,20 @@ def load_korea_semiconductor_exports() -> pd.DataFrame:
     latest_partial_period = (
         max(partial_reference_periods) if partial_reference_periods else pd.NaT
     )
+    monthly_primary = (
+        found["monthly"].loc[~found["monthly"]["is_derived"]].iloc[-1]
+        if "monthly" in found
+        else None
+    )
     monthly_is_missing_or_stale = "monthly" not in found or (
         pd.notna(latest_partial_period)
         and pd.notna(monthly_reference_period)
         and monthly_reference_period < latest_partial_period
     )
-    if monthly_is_missing_or_stale:
+    monthly_needs_enrichment = monthly_is_missing_or_stale or (
+        monthly_primary is not None and pd.isna(monthly_primary.get("yoy"))
+    )
+    if monthly_needs_enrichment:
         try:
             monthly_url, discovery_attempts_extra = _load_with_retry(
                 _discover_korea_monthly_trade_release
@@ -383,9 +394,18 @@ def load_korea_semiconductor_exports() -> pd.DataFrame:
                 lambda: _download_text(monthly_url)
             )
             article_attempts += attempts
-            found["monthly"] = parse_korea_monthly_trade_release(
+            motir_monthly = parse_korea_monthly_trade_release(
                 monthly_html, monthly_url, fetched_at
             )
+            motir_period = motir_monthly.loc[
+                ~motir_monthly["is_derived"], "reference_period"
+            ].max()
+            if (
+                "monthly" not in found
+                or pd.isna(monthly_reference_period)
+                or motir_period >= monthly_reference_period
+            ):
+                found["monthly"] = motir_monthly
         except Exception as error:
             failures.append(f"韓国産業通商部 月次輸出入動向: {error}")
     missing = [kind for kind in ("1_10", "1_20", "monthly") if kind not in found]
@@ -563,15 +583,16 @@ def _discover_korea_monthly_trade_release() -> str:
                 self.href = None
                 self.parts = []
 
-    response = requests.get(
-        KOREA_MOTIR_PRESS_URL, headers=METI_REQUEST_HEADERS, timeout=20
-    )
-    response.raise_for_status()
-    parser = MonthlyLinkParser()
-    parser.feed(response.text)
-    for title, href in parser.links:
-        if re.search(r"20\d{2}년\s*\d{1,2}월\s*수출입\s*동향", title):
-            return urljoin(KOREA_MOTIR_PRESS_URL, href)
+    for page_url in (KOREA_MOTIR_PRESS_URL, KOREA_MOTIR_PRESS_LIST_URL):
+        response = requests.get(
+            page_url, headers=METI_REQUEST_HEADERS, timeout=20
+        )
+        response.raise_for_status()
+        parser = MonthlyLinkParser()
+        parser.feed(response.text)
+        for title, href in parser.links:
+            if re.search(r"20\d{2}년\s*\d{1,2}월\s*수출입\s*동향", title):
+                return urljoin(page_url, href)
     raise DataUnavailableError("韓国産業通商部の最新月次輸出入動向を取得できません。")
 
 
