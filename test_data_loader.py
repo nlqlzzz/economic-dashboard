@@ -295,6 +295,57 @@ class KoreaSemiconductorLoaderTest(unittest.TestCase):
         self.assertEqual(monthly["value"], 46_650)
         self.assertEqual(monthly["source_name"], "韓国産業通商部 輸出入動向")
 
+    @patch("data_loader._download_text")
+    @patch("data_loader._discover_korea_monthly_trade_release")
+    @patch("data_loader._discover_korea_release_links")
+    def test_enriches_current_kcs_monthly_when_yoy_is_missing(
+        self, mock_kcs_discover, mock_monthly_discover, mock_download
+    ) -> None:
+        mock_kcs_discover.return_value = [
+            ("monthly", "https://official.example/kcs-monthly"),
+        ]
+        mock_monthly_discover.return_value = "https://official.example/motir-monthly"
+        bodies = {
+            "https://official.example/kcs-monthly": (
+                "<h1>2026년 8월 월간 수출입 현황 [확정치]</h1>"
+                "<p>반도체 수출(412억 달러)</p>"
+            ),
+            "https://official.example/motir-monthly": (
+                "<h1>2026년 8월 수출입 동향</h1>"
+                "<p>등록일 2026-09-01</p>"
+                "<p>반도체 수출(466.5억 달러, +209.0%)</p>"
+            ),
+        }
+        mock_download.side_effect = lambda url: bodies[url]
+
+        frame = load_korea_semiconductor_exports.__wrapped__()
+
+        monthly = frame[frame["series_id"] == "korea_semiconductor_exports_monthly"].iloc[0]
+        self.assertEqual(monthly["yoy"], 209.0)
+        self.assertEqual(monthly["source_name"], "韓国産業通商部 輸出入動向")
+
+    @patch("data_loader.requests.get")
+    def test_discovers_motir_monthly_release_from_press_list_fallback(
+        self, mock_get
+    ) -> None:
+        home = unittest.mock.Mock(text="<html>no monthly link</html>")
+        home.raise_for_status.return_value = None
+        listing = unittest.mock.Mock(
+            text=(
+                '<a href="/kor/article/ATCL3f49a5a8c/172145/view">'
+                "2026년 8월 수출입동향</a>"
+            )
+        )
+        listing.raise_for_status.return_value = None
+        mock_get.side_effect = [home, listing]
+
+        url = _discover_korea_monthly_trade_release()
+
+        self.assertEqual(
+            url,
+            "https://www.motir.go.kr/kor/article/ATCL3f49a5a8c/172145/view",
+        )
+
     @patch("data_loader.requests.get")
     def test_discovers_current_kcs_data_attribute_link(self, mock_get) -> None:
         rss = """<?xml version="1.0" encoding="UTF-8"?>
