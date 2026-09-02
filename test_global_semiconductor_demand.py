@@ -7,6 +7,7 @@ from global_semiconductor_demand import (
     combine_global_pulse,
     classify_demand_direction,
     parse_korea_customs_release,
+    parse_korea_ict_monthly_release,
     parse_korea_monthly_trade_release,
     parse_taiwan_export_orders_csv,
     summarize_global_demand,
@@ -82,6 +83,24 @@ class GlobalSemiconductorDemandTest(unittest.TestCase):
         self.assertEqual(row["yoy"], 209.0)
         self.assertEqual(row["release_date"], pd.Timestamp("2026-09-01"))
         self.assertFalse(row["is_partial_period"])
+
+    def test_parses_official_motir_ict_monthly_semiconductor_exports(self) -> None:
+        html = """
+        <h1>2024년 11월 정보통신산업(ICT) 수출입 동향</h1>
+        <p>등록일 2024-12-16</p>
+        <p>○ (반도체 : 124.6 억불, 30.3%↑) 전체 반도체 수출은 증가</p>
+        """
+
+        frame = parse_korea_ict_monthly_release(
+            html, "https://official.example/ict-monthly", pd.Timestamp("2026-09-02")
+        )
+
+        row = frame.iloc[0]
+        self.assertEqual(row["reference_period"], pd.Timestamp("2024-11-01"))
+        self.assertEqual(row["release_date"], pd.Timestamp("2024-12-16"))
+        self.assertEqual(row["value"], 12_460)
+        self.assertEqual(row["yoy"], 30.3)
+        self.assertFalse(row["yoy_is_derived"])
 
     def test_parses_taiwan_orders_and_keeps_release_date_unknown(self) -> None:
         lines = ["統計項目,貨品別,資料期(民國年),統計值(金額),計量單位"]

@@ -13,8 +13,10 @@ from data_loader import (
     load_electronic_computer_orders,
     load_indicator_data,
     load_korea_semiconductor_exports,
+    load_korea_semiconductor_monthly_history,
     load_meti_semiconductor_iip,
     load_taiwan_semiconductor_orders,
+    merge_korea_semiconductor_exports,
 )
 from data_status import build_data_status_frame
 from economic_calendar import (
@@ -1713,6 +1715,21 @@ with theme_tab:
                 korea_exports = load_korea_semiconductor_exports()
             except Exception as korea_error:
                 korea_error_text = str(korea_error)
+            try:
+                korea_history = load_korea_semiconductor_monthly_history()
+                korea_exports = merge_korea_semiconductor_exports(
+                    korea_exports, korea_history
+                )
+                if not korea_exports.empty:
+                    korea_error_text = None
+            except Exception as korea_history_error:
+                history_message = f"韓国月次履歴: {korea_history_error}"
+                if korea_exports.empty:
+                    korea_error_text = (
+                        history_message
+                        if korea_error_text is None
+                        else f"{korea_error_text} / {history_message}"
+                    )
             try:
                 snapshot_iip = load_meti_semiconductor_iip()
                 semiconductor_iip = snapshot_iip

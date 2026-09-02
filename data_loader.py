@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import StringIO
 from io import BytesIO
 import os
@@ -16,6 +17,7 @@ import yfinance as yf
 
 from global_semiconductor_demand import (
     parse_korea_customs_release,
+    parse_korea_ict_monthly_release,
     parse_korea_monthly_trade_release,
     parse_taiwan_export_orders_csv,
 )
@@ -74,6 +76,7 @@ KOREA_MOTIR_PRESS_URL = "https://www.motir.go.kr/"
 KOREA_MOTIR_PRESS_LIST_URL = (
     "https://www.motir.go.kr/kor/article/ATCL3f49a5a8c"
 )
+KOREA_MONTHLY_HISTORY_START = "2021-01-01"
 LoadResult = TypeVar("LoadResult")
 
 
@@ -433,6 +436,149 @@ def load_korea_semiconductor_exports() -> pd.DataFrame:
     return result
 
 
+@st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
+def load_korea_semiconductor_monthly_history(
+    start_date: str = KOREA_MONTHLY_HISTORY_START,
+) -> pd.DataFrame:
+    """産業通商部の月次公表履歴を実公表日付きで返す。"""
+    started_at = time.perf_counter()
+    fetched_at = pd.Timestamp.now(tz="Asia/Tokyo")
+    try:
+        links, discovery_attempts = _load_with_retry(
+            lambda: _discover_korea_monthly_trade_releases(start_date)
+        )
+    except RetryFailure as retry_failure:
+        error = retry_failure.error
+        raise SourceLoadError(
+            LoadFailure(
+                source="korea_motir_monthly_history",
+                ticker="semiconductor_exports",
+                error_type=_classify_error(error),
+                detail=str(error),
+                attempts=retry_failure.attempts,
+            )
+        ) from error
+
+    # ICT月次発表は半導体の金額・前年比を本文に持つ。一般の輸出入動向は
+    # 添付資料だけの月が多いため、ICT発表が見つかった場合は不要な大量取得を避ける。
+    ict_links = [
+        link
+        for link in links
+        if "ICT" in link[0].upper() or "정보통신" in link[0]
+    ]
+    release_links = ict_links or links
+
+    frames: list[pd.DataFrame] = []
+    failures: list[str] = []
+
+    def load_release(candidate: tuple[str, str]) -> pd.DataFrame:
+        title, url = candidate
+        html, _ = _load_with_retry(lambda: _download_text(url))
+        try:
+            parser = (
+                parse_korea_ict_monthly_release
+                if "ICT" in title.upper() or "정보통신" in title
+                else parse_korea_monthly_trade_release
+            )
+            return parser(html, url, fetched_at)
+        except ValueError as error:
+            raise DataSchemaError(f"{title}: {error}") from error
+
+    # 公式サイトへの同時接続を抑えつつ、初回の約5年分取得を現実的な時間に収める。
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {
+            executor.submit(load_release, link): link for link in release_links
+        }
+        for future in as_completed(futures):
+            title, _ = futures[future]
+            try:
+                frames.append(future.result())
+            except Exception as error:
+                failures.append(f"{title}: {error}")
+
+    if not frames:
+        detail = " / ".join(failures[:3])
+        raise DataUnavailableError(
+            "韓国産業通商部の月次半導体輸出履歴を取得できません。"
+            + (f"（{detail}）" if detail else "")
+        )
+    result = pd.concat(frames, ignore_index=True)
+    result["yoy"] = pd.to_numeric(result["yoy"], errors="coerce")
+    result = result.dropna(subset=["yoy", "release_date"])
+    if result.empty:
+        raise DataUnavailableError(
+            "韓国月次履歴に公式前年比と実公表日がそろった観測がありません。"
+        )
+    result = (
+        result.sort_values(["reference_period", "release_date"], na_position="first")
+        .drop_duplicates(["series_id", "reference_period"], keep="first")
+        .reset_index(drop=True)
+    )
+    result.attrs.update(
+        {
+            "source": "韓国産業通商部 輸出入動向",
+            "source_url": KOREA_MOTIR_PRESS_LIST_URL,
+            "fetched_at": fetched_at,
+            "fetch_attempts": discovery_attempts,
+            "fetch_duration_seconds": time.perf_counter() - started_at,
+            "discovered_release_count": len(links),
+            "requested_release_count": len(release_links),
+            "loaded_release_count": len(result),
+            "load_warnings": failures,
+        }
+    )
+    return result
+
+
+def merge_korea_semiconductor_exports(
+    latest: pd.DataFrame,
+    monthly_history: pd.DataFrame,
+) -> pd.DataFrame:
+    """速報と月次履歴を結合し、同じ対象月は実公表日が新しい行を残す。"""
+    available = [frame for frame in (monthly_history, latest) if not frame.empty]
+    if not available:
+        return pd.DataFrame()
+    result = pd.concat(available, ignore_index=True)
+    monthly_mask = result["series_id"].eq("korea_semiconductor_exports_monthly")
+    valid_monthly_mask = monthly_mask & pd.to_numeric(
+        result["yoy"], errors="coerce"
+    ).notna()
+    excluded_incomplete_monthly = 0
+    if valid_monthly_mask.any():
+        incomplete_monthly = monthly_mask & ~valid_monthly_mask
+        excluded_incomplete_monthly = int(incomplete_monthly.sum())
+        result = result.loc[~incomplete_monthly].copy()
+    result = (
+        result.sort_values(
+            ["series_id", "reference_period", "release_date"],
+            na_position="first",
+        )
+        .drop_duplicates(
+            ["series_id", "reference_period", "is_derived"], keep="last"
+        )
+        .reset_index(drop=True)
+    )
+    history_warnings = monthly_history.attrs.get("load_warnings", [])
+    latest_warnings = latest.attrs.get("load_warnings", [])
+    result.attrs.update(latest.attrs)
+    result.attrs.update(
+        {
+            "monthly_history_start": (
+                result.loc[
+                    result["series_id"].eq("korea_semiconductor_exports_monthly"),
+                    "reference_period",
+                ].min()
+            ),
+            "monthly_history_count": int(
+                result["series_id"].eq("korea_semiconductor_exports_monthly").sum()
+            ),
+            "load_warnings": [*history_warnings, *latest_warnings],
+            "excluded_incomplete_monthly": excluded_incomplete_monthly,
+        }
+    )
+    return result
+
+
 def _download_bytes(url: str) -> bytes:
     response = requests.get(url, headers=METI_REQUEST_HEADERS, timeout=30)
     response.raise_for_status()
@@ -593,7 +739,99 @@ def _discover_korea_monthly_trade_release() -> str:
         for title, href in parser.links:
             if re.search(r"20\d{2}년\s*\d{1,2}월\s*수출입\s*동향", title):
                 return urljoin(page_url, href)
+    # 現行一覧は詳細URLではなく javascript:article.view(id) を使うため、
+    # アーカイブ用Parserを共通のフォールバックとして利用する。
+    recent_start = (pd.Timestamp.now(tz="Asia/Tokyo") - pd.DateOffset(months=6))
+    for title, url in _discover_korea_monthly_trade_releases(
+        recent_start.strftime("%Y-%m-%d")
+    ):
+        if "ICT" not in title.upper() and "정보통신" not in title:
+            return url
     raise DataUnavailableError("韓国産業通商部の最新月次輸出入動向を取得できません。")
+
+
+def _discover_korea_monthly_trade_releases(
+    start_date: str = KOREA_MONTHLY_HISTORY_START,
+) -> list[tuple[str, str]]:
+    """産業通商部の検索一覧から月次輸出入動向記事を新しい順に返す。"""
+    from html import unescape
+    from html.parser import HTMLParser
+    from urllib.parse import urljoin
+
+    class MonthlyArchiveParser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.article_id: str | None = None
+            self.parts: list[str] = []
+            self.links: list[tuple[str, str]] = []
+            self.article_count = 0
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag.lower() != "a":
+                return
+            action = " ".join(
+                value or "" for key, value in attrs if key in {"href", "onclick"}
+            )
+            match = re.search(r"article\.view\(['\"]?(\d+)['\"]?\)", action)
+            if match:
+                self.article_count += 1
+                self.article_id = match.group(1)
+                self.parts = []
+
+        def handle_data(self, data: str) -> None:
+            if self.article_id is not None:
+                self.parts.append(data)
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag.lower() != "a" or self.article_id is None:
+                return
+            title = " ".join(unescape("".join(self.parts)).split())
+            compact = re.sub(r"\s+", "", title)
+            if (
+                re.search(r"20\d{2}년\d{1,2}월", compact)
+                and "수출입동향" in compact
+            ):
+                url = urljoin(
+                    KOREA_MOTIR_PRESS_LIST_URL,
+                    f"/kor/article/ATCL3f49a5a8c/{self.article_id}/view",
+                )
+                self.links.append((title, url))
+            self.article_id = None
+            self.parts = []
+
+    start = pd.Timestamp(start_date)
+    end = pd.Timestamp.now(tz="Asia/Tokyo").tz_localize(None).normalize()
+    collected: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for page_index in range(1, 5):
+        response = requests.get(
+            KOREA_MOTIR_PRESS_LIST_URL,
+            params={
+                "pageIndex": page_index,
+                "rowPageC": 100,
+                "searchCondition": 1,
+                "searchKeyword": "수출입 동향",
+                "startDtD": start.strftime("%Y-%m-%d"),
+                "endDtD": end.strftime("%Y-%m-%d"),
+            },
+            headers=METI_REQUEST_HEADERS,
+            timeout=30,
+        )
+        response.raise_for_status()
+        parser = MonthlyArchiveParser()
+        parser.feed(response.text)
+        page_new = 0
+        for title, url in parser.links:
+            if url in seen:
+                continue
+            seen.add(url)
+            collected.append((title, url))
+            page_new += 1
+        if parser.article_count < 100:
+            break
+    if not collected:
+        raise DataUnavailableError("韓国産業通商部の月次輸出入動向履歴を探索できません。")
+    return collected
 
 
 def _has_all_korea_release_kinds(
