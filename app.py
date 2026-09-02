@@ -73,7 +73,11 @@ from similar_periods import (
     find_similar_periods,
 )
 from semiconductor_view import (
+    build_current_global_pulse,
     render_global_demand,
+    render_global_semiconductor_pulse,
+    render_overseas_historical_validation,
+    render_price_vs_fundamentals,
     render_semiconductor_market_compact,
     render_semiconductor_snapshot,
 )
@@ -1699,6 +1703,8 @@ with theme_tab:
             taiwan_error_text = None
             korea_error_text = None
             japan_snapshot_assessment = None
+            japan_iip_summary = pd.DataFrame()
+            machinery_summary = {}
             try:
                 taiwan_orders = load_taiwan_semiconductor_orders()
             except Exception as taiwan_error:
@@ -1713,8 +1719,15 @@ with theme_tab:
                 japan_snapshot_assessment = summarize_semiconductor_iip(snapshot_iip)[
                     "assessment"
                 ]
+                japan_iip_summary = summarize_semiconductor_iip(snapshot_iip)["summary"]
             except Exception:
                 japan_snapshot_assessment = None
+            try:
+                machinery_orders = load_electronic_computer_orders()
+                machinery_summary = summarize_electronic_computer_orders(machinery_orders)
+            except Exception:
+                machinery_orders = pd.Series(dtype=float)
+                machinery_summary = {}
 
             render_semiconductor_snapshot(
                 theme_series,
@@ -1722,6 +1735,17 @@ with theme_tab:
                 taiwan_orders,
                 korea_exports,
                 japan_snapshot_assessment,
+            )
+            global_pulse = build_current_global_pulse(
+                taiwan_orders,
+                korea_exports,
+                japan_iip_summary,
+                machinery_summary,
+            )
+            render_global_semiconductor_pulse(global_pulse)
+            render_price_vs_fundamentals(
+                theme_series.get("SOX指数"),
+                global_pulse,
             )
             render_semiconductor_market_compact(theme_series, INDICATORS)
             render_global_demand(
@@ -2037,6 +2061,21 @@ with theme_tab:
                 )
 
             st.markdown("#### Historical Validation")
+            overseas_validation_assets = {
+                name: theme_series[name]
+                for name in (
+                    "SOX指数",
+                    "東京エレクトロン（8035）",
+                    "アドバンテスト（6857）",
+                    "ディスコ（6146）",
+                    "キオクシア（285A）",
+                )
+                if name in theme_series
+            }
+            render_overseas_historical_validation(
+                pd.concat([taiwan_orders, korea_exports], ignore_index=True),
+                overseas_validation_assets,
+            )
             st.markdown("##### 過去の株価反応を検証")
             st.caption(
                 "経済統計の対象月ではなく、市場参加者が利用できた日以降の株価で検証します。"

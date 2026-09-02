@@ -3,6 +3,8 @@ import unittest
 import pandas as pd
 
 from global_semiconductor_demand import (
+    assess_regional_pulse,
+    combine_global_pulse,
     classify_demand_direction,
     parse_korea_customs_release,
     parse_korea_monthly_trade_release,
@@ -12,6 +14,56 @@ from global_semiconductor_demand import (
 
 
 class GlobalSemiconductorDemandTest(unittest.TestCase):
+    def test_global_pulse_requires_two_regions(self) -> None:
+        available = {
+            "region": "Taiwan", "state": "Improving", "direction": "↑",
+            "contributors_positive": ["orders"], "contributors_negative": [],
+            "contributors_missing": [], "observations_used": [], "reason": "test",
+        }
+        missing = {**available, "state": "Unavailable", "direction": "→"}
+        result = combine_global_pulse({"Taiwan": available, "Korea": missing, "Japan": missing})
+        self.assertEqual(result["state"], "Unavailable")
+        self.assertEqual(result["coverage"], 1)
+        self.assertEqual(result["coverage_label"], "Limited Data")
+
+    def test_global_pulse_reports_two_of_three_coverage(self) -> None:
+        improving = {"state": "Improving"}
+        strong = {"state": "Strong"}
+        missing = {"state": "Unavailable"}
+        result = combine_global_pulse({"Taiwan": improving, "Korea": strong, "Japan": missing})
+        self.assertEqual(result["state"], "Improving")
+        self.assertEqual(result["coverage_label"], "3地域中2地域で判定")
+
+    def test_global_pulse_all_regions_strong_or_weakening(self) -> None:
+        strong = {"state": "Strong"}
+        weak = {"state": "Weakening"}
+        self.assertEqual(
+            combine_global_pulse({"Taiwan": strong, "Korea": strong, "Japan": strong})["state"],
+            "Strong",
+        )
+        self.assertEqual(
+            combine_global_pulse({"Taiwan": weak, "Korea": weak, "Japan": weak})["state"],
+            "Weakening",
+        )
+
+    def test_global_pulse_each_missing_region_keeps_two_region_coverage(self) -> None:
+        improving = {"state": "Improving"}
+        missing = {"state": "Unavailable"}
+        for missing_region in ("Taiwan", "Korea", "Japan"):
+            regions = {region: improving for region in ("Taiwan", "Korea", "Japan")}
+            regions[missing_region] = missing
+            with self.subTest(region=missing_region):
+                self.assertEqual(combine_global_pulse(regions)["coverage"], 2)
+
+    def test_regional_pulse_handles_mixed_and_missing(self) -> None:
+        summary = pd.DataFrame([
+            {"region": "Taiwan", "series_id": "a", "series_name": "A", "yoy": 5.0, "three_month_average_yoy": 3.0, "six_month_momentum": 1.0},
+            {"region": "Taiwan", "series_id": "b", "series_name": "B", "yoy": -2.0, "three_month_average_yoy": 1.0, "six_month_momentum": -1.0},
+        ])
+        result = assess_regional_pulse(summary, "Taiwan")
+        self.assertEqual(result["state"], "Mixed")
+        self.assertEqual(len(result["contributors_positive"]), 1)
+        self.assertEqual(len(result["contributors_negative"]), 1)
     def test_parses_official_motir_monthly_semiconductor_exports(self) -> None:
         html = """
         <h1>2026년 8월 수출입동향</h1>
