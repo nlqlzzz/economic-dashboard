@@ -1,6 +1,7 @@
 import unittest
 
 from indicators import INDICATORS
+from japan_equity import CORE_20
 from watchlist_storage import load_watchlists
 
 
@@ -48,6 +49,23 @@ class MarketIndicatorDefinitionsTest(unittest.TestCase):
         self.assertEqual(
             watchlists["日本株"], ["任天堂（7974）", "三菱UFJ（8306）"]
         )
+
+    def test_core_20_is_available_once_in_individual_stock_category(self):
+        individual_stocks = {
+            name: info
+            for name, info in INDICATORS.items()
+            if info["category"] == "個別株"
+        }
+
+        for stock in CORE_20:
+            matches = [
+                name
+                for name, info in individual_stocks.items()
+                if info["ticker"] == stock["ticker"]
+            ]
+            with self.subTest(ticker=stock["ticker"]):
+                self.assertEqual(len(matches), 1)
+                self.assertTrue(matches[0].endswith(f'（{stock["code"]}）'))
 
 
 if __name__ == "__main__":
