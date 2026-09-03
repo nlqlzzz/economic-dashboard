@@ -16,6 +16,7 @@ from data_loader import (
     load_korea_semiconductor_monthly_history,
     load_meti_semiconductor_iip,
     load_taiwan_semiconductor_orders,
+    load_yfinance_batch,
     merge_korea_semiconductor_exports,
 )
 from data_status import build_data_status_frame
@@ -33,6 +34,15 @@ from event_analysis import (
     analyze_event_reactions,
 )
 from indicators import DATA_SOURCE_LABELS, INDICATORS
+from japan_equity import (
+    MACRO_SERIES,
+    aggregate_by_sector,
+    aggregate_by_theme,
+    build_market_map,
+    calculate_macro_sensitivity,
+    core_tickers,
+)
+from japan_equity_view import render_japan_core_equity
 from japan_semiconductor_cycle import (
     analyze_release_aware_lead_lag,
     analyze_semiconductor_condition_returns,
@@ -1696,6 +1706,63 @@ with theme_tab:
                     theme_errors.append(f"{theme_indicator_name}: {theme_error}")
         for theme_error in theme_errors:
             st.warning(f"テーマ別ビューでは {theme_error}")
+
+        if selected_theme_name == "日本株":
+            core_start = (
+                pd.Timestamp.today().normalize() - pd.DateOffset(years=5, days=120)
+            ).date()
+            core_prices = pd.DataFrame()
+            core_market_map = pd.DataFrame()
+            core_stock_failures: list[str] = []
+            core_macro_failures: list[str] = []
+            try:
+                core_batch = load_yfinance_batch(
+                    (*core_tickers(), "1306.T"), str(core_start)
+                )
+                core_prices = core_batch.reindex(
+                    columns=[ticker for ticker in core_tickers() if ticker in core_batch]
+                )
+                topix = (
+                    core_batch["1306.T"]
+                    if "1306.T" in core_batch
+                    else pd.Series(dtype=float)
+                )
+                for missing_ticker in core_batch.attrs.get("missing_tickers", []):
+                    core_stock_failures.append(
+                        f"株価を取得できません: {missing_ticker}"
+                    )
+                core_market_map = build_market_map(core_prices, topix)
+
+                core_macros: dict[str, pd.Series] = {}
+                for macro_name in MACRO_SERIES:
+                    if macro_name == "TOPIX連動ETF（1306）" and not topix.empty:
+                        core_macros[macro_name] = topix
+                        continue
+                    if macro_name in theme_series:
+                        core_macros[macro_name] = theme_series[macro_name]
+                        continue
+                    try:
+                        core_macros[macro_name] = load_indicator_data(
+                            INDICATORS[macro_name], str(core_start)
+                        )
+                    except Exception as macro_error:
+                        core_macro_failures.append(f"{macro_name}: {macro_error}")
+                core_sensitivity = calculate_macro_sensitivity(
+                    core_prices, core_macros
+                )
+                render_japan_core_equity(
+                    core_market_map,
+                    aggregate_by_sector(core_market_map),
+                    aggregate_by_theme(core_market_map),
+                    core_sensitivity,
+                    core_stock_failures,
+                    core_macro_failures,
+                )
+            except Exception as core_error:
+                st.warning(
+                    "Japan Core 20を表示できません。既存の日本株テーマは継続表示します: "
+                    f"{core_error}"
+                )
 
         if selected_theme_name == "半導体":
             semiconductor_iip = pd.DataFrame()
