@@ -1,3 +1,6 @@
+from japan_equity import CORE_20
+
+
 DATA_SOURCE_LABELS = {
     "fred": "FRED",
     "yfinance": "Yahoo Finance",
@@ -500,3 +503,22 @@ INDICATORS = {
         ],
     },
 }
+
+
+def _register_core_20_individual_stocks() -> None:
+    """Expose Core 20 in the existing individual-stock selector without duplicates."""
+    registered_tickers = {info.get("ticker") for info in INDICATORS.values()}
+    for stock in CORE_20:
+        if stock["ticker"] in registered_tickers:
+            continue
+        INDICATORS[f'{stock["name"]}（{stock["code"]}）'] = {
+            "source": "yfinance",
+            "ticker": stock["ticker"],
+            "unit": "円",
+            "yoy": False,
+            "category": "個別株",
+        }
+        registered_tickers.add(stock["ticker"])
+
+
+_register_core_20_individual_stocks()
