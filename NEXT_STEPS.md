@@ -1,6 +1,6 @@
 # 次に進める改善
 
-最終更新: 2026-09-03
+最終更新: 2026-09-04
 
 このファイルには未完了の項目だけを記載します。完了済みの項目は[`docs/COMPLETED_ROADMAP.md`](docs/COMPLETED_ROADMAP.md)へ移します。
 
@@ -45,12 +45,19 @@
    - 台湾輸出受注の過去公表日と当時公表値を取得できる公式経路を調査し、対象月と実際の利用可能日を分離する。
 3. 海外Historical Validation拡張
    - 韓国・台湾の厳密検証期間を拡張し、複数資産で先行性と条件付きリターンの安定性を再確認する。
-4. Global Semiconductor Cycle Score（保留）
+4. 米国Big TechのAI関連設備投資（CapEx）分析（中期）
+   - Japan Core 20 / Macro Sensitivityと今後の個別株分析に一定の目途がついた後、Microsoft、Alphabet / Google、Amazon、Metaを中心に着手する。必要に応じてOracle、Apple、その他主要Cloud / Hyperscalerも検討する。
+   - 四半期CapEx、前年比、前四半期比、トレンド、Guidance、AI / Data Center関連の投資額・計画、各社合計CapEx、合計前年比、CapEx momentumを候補とする。
+   - 会計上のCapEx全体とAI専用CapExを混同せず、企業間の定義差と、AI関連額を公式に分離できる範囲を明示する。
+   - Big Tech CapEx / AI Investment → Taiwan Orders → Korea Exports → Japan Production / Shipments / Inventory → Corporate Earnings → Semiconductor Market / SOX → Price vs Fundamentals → Historical Validationという上流から下流の分析導線を検討する。
+   - CapEx、Guidance、momentumが台湾受注、韓国輸出、日本の生産・出荷、SOX、日本主要半導体株に先行したかを公表日基準で検証し、Proxy・相関・先行指標を混同しない。
+   - 着手時に公式データ、SEC filings / Investor Relations資料、CapEx定義の企業間差、AI関連CapExの抽出可能性、Guidance、公表日管理、Historical Validation手法を改めて調査する。
+5. Global Semiconductor Cycle Score（保留）
    - 複数地域・複数資産で安定した有用性を確認できた場合に限り、各要素の寄与を開示する説明可能なスコアを再検討する。
 
 共通原則:
 
-- Market → Global Demand → Japan Cycle → Price vs Fundamentals → Historical Validationの順で管理する。
+- 将来はAI Investment → Orders → Exports → Production / Inventory → Corporate Earnings → Market Priceの資金・サプライチェーンを可視化し、現在はMarket → Global Demand → Japan Cycle → Price vs Fundamentals → Historical Validationの順で管理する。
 - 台湾輸出受注は注文、韓国半導体輸出は金額、日本の統計は生産・出荷・在庫・設備投資として役割を区別する。
 - 対象期間、公表日、取得日時、速報・暫定・確定を混同しない。
 - 公式値と当アプリ計算値を区別し、公表日や営業日調整値を推測で補完しない。
