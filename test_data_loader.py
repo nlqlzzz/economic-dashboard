@@ -20,6 +20,7 @@ from data_loader import (
     load_indicator_data,
     load_korea_semiconductor_exports,
     load_korea_semiconductor_monthly_history,
+    load_yfinance_batch,
     merge_korea_semiconductor_exports,
 )
 
@@ -93,6 +94,27 @@ class IndicatorFallbackTest(unittest.TestCase):
         pd.testing.assert_series_equal(series, expected)
         self.assertEqual(attempts, 2)
         mock_sleep.assert_called_once()
+
+    @patch("data_loader.yf.download")
+    def test_batch_yfinance_keeps_available_tickers_and_reports_missing(
+        self, mock_download
+    ) -> None:
+        index = pd.date_range("2026-01-01", periods=3, freq="B")
+        mock_download.return_value = pd.DataFrame(
+            {
+                ("Close", "7203.T"): [100.0, 101.0, 102.0],
+                ("Close", "8306.T"): [None, None, None],
+            },
+            index=index,
+        )
+
+        frame = load_yfinance_batch.__wrapped__(
+            ("7203.T", "8306.T"), "2026-01-01"
+        )
+
+        self.assertEqual(list(frame.columns), ["7203.T"])
+        self.assertEqual(frame.attrs["missing_tickers"], ["8306.T"])
+        mock_download.assert_called_once()
 
 
 class MetiIipParserTest(unittest.TestCase):

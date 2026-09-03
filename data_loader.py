@@ -202,6 +202,60 @@ def load_indicator_data(info: dict[str, object], start_date: str) -> pd.Series:
 
 
 @st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
+def load_yfinance_batch(tickers: tuple[str, ...], start_date: str) -> pd.DataFrame:
+    """複数の価格系列を一括取得し、取得できた銘柄だけを返す。"""
+    if not tickers:
+        return pd.DataFrame()
+    unique_tickers = tuple(dict.fromkeys(tickers))
+    started_at = time.perf_counter()
+    try:
+        frame, attempts = _load_with_retry(
+            lambda: yf.download(
+                list(unique_tickers),
+                start=start_date,
+                auto_adjust=True,
+                progress=False,
+                group_by="column",
+                threads=True,
+            )
+        )
+    except RetryFailure as retry_failure:
+        error = retry_failure.error
+        raise SourceLoadError(
+            LoadFailure(
+                source="yfinance_batch",
+                ticker=",".join(unique_tickers),
+                error_type=_classify_error(error),
+                detail=str(error),
+                attempts=retry_failure.attempts,
+            )
+        ) from error
+    if frame.empty:
+        raise DataUnavailableError("Yahoo Financeの一括価格データが空です。")
+
+    close = frame["Close"] if "Close" in frame else pd.DataFrame()
+    if isinstance(close, pd.Series):
+        close = close.to_frame(name=unique_tickers[0])
+    if not isinstance(close, pd.DataFrame):
+        close = pd.DataFrame(close)
+    close.index = pd.to_datetime(close.index).tz_localize(None)
+    close = close.apply(pd.to_numeric, errors="coerce").sort_index()
+    available = [ticker for ticker in unique_tickers if ticker in close and close[ticker].notna().any()]
+    result = close.reindex(columns=available).dropna(how="all")
+    result.attrs.update(
+        {
+            "source": "yfinance",
+            "fetched_at": pd.Timestamp.now(tz="Asia/Tokyo"),
+            "fetch_attempts": attempts,
+            "fetch_duration_seconds": time.perf_counter() - started_at,
+            "requested_tickers": list(unique_tickers),
+            "missing_tickers": [ticker for ticker in unique_tickers if ticker not in available],
+        }
+    )
+    return result
+
+
+@st.cache_data(ttl=60 * 60 * 6, show_spinner=False)
 def load_meti_semiconductor_iip() -> pd.DataFrame:
     """METIの2020年基準IIPから電子部品・デバイス工業の4指数を返す。"""
     started_at = time.perf_counter()
