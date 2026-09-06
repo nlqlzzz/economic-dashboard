@@ -7,12 +7,15 @@ from japan_equity import (
     aggregate_by_sector,
     build_market_map,
     calculate_macro_sensitivity,
+    classify_macro_explainability,
+    classify_driver_stability,
     core_tickers,
+    estimate_market_model,
     expected_proxy_names,
+    residual_returns,
+    top_observed_correlations,
     top_macro_sensitivities,
 )
-
-
 class Core20MasterTest(unittest.TestCase):
     def test_master_contains_twenty_unique_stocks_with_required_metadata(self) -> None:
         self.assertEqual(len(CORE_20), 20)
@@ -125,6 +128,74 @@ class MacroSensitivityTest(unittest.TestCase):
         )
         result = top_macro_sensitivities(frame, "7203.T", limit=3)
         self.assertEqual(list(result["macro"]), ["B", "C", "D"])
+
+
+class MarketAdjustedSensitivityTest(unittest.TestCase):
+    def test_estimates_beta_and_residual(self) -> None:
+        index = pd.date_range("2024-01-01", periods=280, freq="B")
+        market_return = pd.Series(([0.01, -0.005, 0.003, -0.002] * 70), index=index)
+        stock_return = 1.5 * market_return + 0.001
+        market = (1 + market_return).cumprod() * 100
+        stock = (1 + stock_return).cumprod() * 100
+
+        residual, model = residual_returns(stock, market)
+
+        self.assertTrue(model["available"])
+        self.assertAlmostEqual(model["beta"], 1.5, places=2)
+        self.assertGreater(len(residual), 250)
+        self.assertLess(residual.abs().max(), 1e-10)
+
+    def test_beta_is_unavailable_with_insufficient_observations(self) -> None:
+        series = pd.Series(range(100), dtype=float)
+        result = estimate_market_model(series, series, minimum_observations=200)
+        self.assertFalse(result["available"])
+
+    def test_active_return_is_stock_minus_topix(self) -> None:
+        index = pd.date_range("2025-01-01", periods=100, freq="B")
+        prices = pd.DataFrame({"7203.T": range(100, 200)}, index=index, dtype=float)
+        topix = pd.Series(range(100, 180), index=index[:80], dtype=float)
+        row = build_market_map(prices, topix).query("ticker == '7203.T'").iloc[0]
+        self.assertAlmostEqual(row["relative_1m"], row["return_1m"] - _return_since(topix, 1))
+
+    def test_stability_requires_strength_not_only_matching_sign(self) -> None:
+        label, _ = classify_driver_stability(
+            {120: 0.05, 60: 0.08, 20: 0.03}, {120: 120, 60: 60, 20: 20}
+        )
+        self.assertEqual(label, "Low")
+
+    def test_stability_recognizes_consistent_positive_and_negative_drivers(self) -> None:
+        positive, _ = classify_driver_stability(
+            {120: 0.35, 60: 0.42, 20: 0.40}, {120: 120, 60: 60, 20: 20}
+        )
+        negative, _ = classify_driver_stability(
+            {120: -0.32, 60: -0.40, 20: -0.28}, {120: 120, 60: 60, 20: 20}
+        )
+        self.assertEqual(positive, "High")
+        self.assertEqual(negative, "High")
+
+    def test_topix_is_excluded_from_ex_post_macro_ranking(self) -> None:
+        frame = pd.DataFrame({
+            "ticker": ["7203.T"] * 3,
+            "macro": ["TOPIX連動ETF（1306）", "USD/JPY", "WTI原油先物"],
+            "correlation_120d": [0.99, 0.2, -0.4],
+        })
+        result = top_observed_correlations(frame, "7203.T")
+        self.assertNotIn("TOPIX連動ETF（1306）", set(result["macro"]))
+
+    def test_macro_explainability_can_identify_unexplained_move(self) -> None:
+        exposure = {"status": "Available", "recent_residual_3m": 18.0}
+        drivers = [{"status": "Available", "correlation_120d": 0.08, "stability": "Low"}]
+        regression = {"adjusted_r2_improvement": -0.01}
+        result = classify_macro_explainability(exposure, drivers, regression)
+        self.assertEqual(result["classification"], "Macro-unexplained")
+
+    def test_missing_driver_is_unavailable_not_low_explainability(self) -> None:
+        result = classify_macro_explainability(
+            {"status": "Available", "recent_residual_3m": 1.0},
+            [{"status": "Unavailable", "correlation_120d": None, "stability": "Unavailable"}],
+            {"status": "Unavailable"},
+        )
+        self.assertEqual(result["classification"], "Unavailable")
 
 
 def _return_since(series: pd.Series, months: int) -> float:

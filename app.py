@@ -38,11 +38,12 @@ from japan_equity import (
     MACRO_SERIES,
     aggregate_by_sector,
     aggregate_by_theme,
+    build_macro_sensitivity_analysis,
     build_market_map,
-    calculate_macro_sensitivity,
     core_tickers,
 )
 from japan_equity_view import render_japan_core_equity
+from price_quality import inspect_price_series
 from japan_semiconductor_cycle import (
     analyze_release_aware_lead_lag,
     analyze_semiconductor_condition_returns,
@@ -1731,7 +1732,9 @@ with theme_tab:
                     core_stock_failures.append(
                         f"株価を取得できません: {missing_ticker}"
                     )
-                core_market_map = build_market_map(core_prices, topix)
+                topix_quality = inspect_price_series(topix)
+                topix_for_analysis = topix_quality.series if topix_quality.usable else pd.Series(dtype=float)
+                core_market_map = build_market_map(core_prices, topix_for_analysis)
 
                 core_macros: dict[str, pd.Series] = {}
                 for macro_name in MACRO_SERIES:
@@ -1747,8 +1750,11 @@ with theme_tab:
                         )
                     except Exception as macro_error:
                         core_macro_failures.append(f"{macro_name}: {macro_error}")
-                core_sensitivity = calculate_macro_sensitivity(
-                    core_prices, core_macros
+                core_sensitivity = build_macro_sensitivity_analysis(
+                    core_prices,
+                    core_macros,
+                    topix_quality,
+                    core_market_map,
                 )
                 render_japan_core_equity(
                     core_market_map,

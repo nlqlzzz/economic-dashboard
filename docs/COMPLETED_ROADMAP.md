@@ -75,8 +75,9 @@
    - 現在値、1日・5日・1か月・3か月リターンと、TOPIX連動ETFに対する1か月・3か月相対リターンを表示。
    - Core 20内のSnapshot、セクター集計、複数所属可能なTheme / Driver集計を追加。
 3. Macro Sensitivity
-   - 既存の日次変換・相関変化処理を再利用し、各銘柄と主要マクロ系列の20日・60日相関、1・3か月前差、過去分布percentileを計算。
-   - 銘柄マスターの想定ドライバーと、直近60日で絶対相関が大きい実測系列を分離して表示。
+   - TOPIX連動ETFとのMarket Beta・相関・Active ReturnをMarket Exposureとして分離し、Primary Driverは252営業日βによる市場調整後Residual Returnとの120・60・20日相関で分析。
+   - 事前定義済みPrimary Driverを主表示にし、相関の強さ・符号・期間間安定性、回帰説明力の改善からMacro Explainabilityを説明表示。データ観測後のEx post相関はTOPIXを除外して詳細表示へ移動。
+   - 一時的な価格水準の往復不連続を一般化した品質検査で検知し、高確度区間だけを除外。復帰を確認できない極端変動では市場調整後分析を停止する。
 
 ## Technical Roadmap
 
