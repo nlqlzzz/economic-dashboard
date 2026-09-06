@@ -1,6 +1,6 @@
 # 次に進める改善
 
-最終更新: 2026-09-04
+最終更新: 2026-09-06
 
 このファイルには未完了の項目だけを記載します。完了済みの項目は[`docs/COMPLETED_ROADMAP.md`](docs/COMPLETED_ROADMAP.md)へ移します。
 
@@ -67,6 +67,8 @@
 
 目的: 日本の主要大型株について、市場全体に対する強弱、テーマ、実測マクロ感応度を一つの導線で確認する。
 
+現在地: Macro Sensitivityの市場調整後Residual Return中心への再設計は完了。次の主要候補はStock Detail。
+
 1. Stock Detail（将来）
    - Core 20一覧から銘柄を選び、価格推移、相対強度、想定ドライバー、実測相関を銘柄単位で深掘りする。
 2. Fundamentals / Earnings / News（将来）
@@ -75,7 +77,7 @@
 共通原則:
 
 - Core 20内集計をTOPIX業種指数の代替として扱わない。
-- 想定ドライバーと実測相関を区別し、相関を因果関係として表示しない。
+- Market Exposure、事前定義済みPrimary Driver、データ観測後のEx post相関を区別し、相関を因果関係や先行性として表示しない。
 - TOPIX連動ETFをProxyとして使用する場合は指数そのものではないことを明示する。
 
 ## Technical Roadmap

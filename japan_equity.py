@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from correlation_analysis import build_daily_change_frame, correlation_change_summary
+from price_quality import PriceQualityResult
 from utils import percent_change_since
+
+
+MARKET_PROXY_NAME = "TOPIX連動ETF（1306）"
+PRIMARY_WINDOWS = (120, 60, 20)
+MARKET_BETA_WINDOW = 252
+MARKET_BETA_MINIMUM = 200
+SHORT_BETA_WINDOW = 120
+SHORT_BETA_MINIMUM = 100
+BETA_UNSTABLE_THRESHOLD = 0.30
 
 
 CORE_20 = (
@@ -180,6 +191,349 @@ def expected_proxy_names(stock: dict[str, object]) -> tuple[str, ...]:
             if (proxy := MACRO_PROXY_MAP.get(str(driver))) is not None
         )
     )
+
+
+def build_macro_sensitivity_analysis(
+    prices: pd.DataFrame,
+    macro_series: dict[str, pd.Series],
+    topix_quality: PriceQualityResult,
+    market_map: pd.DataFrame,
+) -> dict[str, pd.DataFrame]:
+    """Separate market exposure from ex-ante macro-driver relationships."""
+    exposure_rows: list[dict[str, object]] = []
+    primary_rows: list[dict[str, object]] = []
+    observed_rows: list[dict[str, object]] = []
+    regression_rows: list[dict[str, object]] = []
+    explainability_rows: list[dict[str, object]] = []
+    market_lookup = market_map.set_index("ticker") if not market_map.empty else pd.DataFrame()
+
+    for stock in CORE_20:
+        ticker = str(stock["ticker"])
+        stock_prices = prices[ticker] if ticker in prices else pd.Series(dtype=float)
+        relative_1m = _lookup_market_value(market_lookup, ticker, "relative_1m")
+        relative_3m = _lookup_market_value(market_lookup, ticker, "relative_3m")
+        exposure, residual = _market_exposure(
+            stock_prices, topix_quality, relative_1m, relative_3m
+        )
+        exposure_rows.append({**_stock_identity(stock), **exposure})
+
+        stock_primary = _primary_driver_rows(stock, residual, macro_series)
+        primary_rows.extend(stock_primary)
+        observed_rows.extend(_observed_correlation_rows(stock, residual, macro_series))
+        regression = _primary_regression(stock, stock_prices, topix_quality, macro_series)
+        regression_rows.append({**_stock_identity(stock), **regression})
+        explainability_rows.append(
+            {
+                **_stock_identity(stock),
+                **classify_macro_explainability(exposure, stock_primary, regression),
+            }
+        )
+
+    return {
+        "market_exposure": pd.DataFrame(exposure_rows),
+        "primary_drivers": pd.DataFrame(primary_rows),
+        "observed_correlations": pd.DataFrame(observed_rows),
+        "regression": pd.DataFrame(regression_rows),
+        "explainability": pd.DataFrame(explainability_rows),
+    }
+
+
+def estimate_market_model(
+    stock_returns: pd.Series,
+    market_returns: pd.Series,
+    *,
+    window: int = MARKET_BETA_WINDOW,
+    minimum_observations: int = MARKET_BETA_MINIMUM,
+) -> dict[str, object]:
+    pair = pd.concat({"stock": stock_returns, "market": market_returns}, axis=1).dropna().tail(window)
+    if len(pair) < minimum_observations or pair["market"].var() <= 0:
+        return {"available": False, "observations": len(pair), "reason": "観測数不足または市場分散不足"}
+    beta = float(pair["stock"].cov(pair["market"]) / pair["market"].var())
+    intercept = float(pair["stock"].mean() - beta * pair["market"].mean())
+    correlation = float(pair["stock"].corr(pair["market"]))
+    return {
+        "available": True,
+        "observations": len(pair),
+        "beta": beta,
+        "intercept": intercept,
+        "correlation": correlation,
+    }
+
+
+def residual_returns(
+    stock_prices: pd.Series,
+    market_prices: pd.Series,
+    *,
+    window: int = MARKET_BETA_WINDOW,
+    minimum_observations: int = MARKET_BETA_MINIMUM,
+) -> tuple[pd.Series, dict[str, object]]:
+    frame, _ = build_daily_change_frame(
+        {"stock": stock_prices, "market": market_prices},
+        {"stock": "return", "market": "return"},
+    )
+    model = estimate_market_model(
+        frame["stock"], frame["market"], window=window, minimum_observations=minimum_observations
+    )
+    if not model["available"]:
+        return pd.Series(dtype=float), model
+    pair = frame[["stock", "market"]].dropna()
+    residual = pair["stock"] - float(model["intercept"]) - float(model["beta"]) * pair["market"]
+    residual.name = "Market-adjusted Return"
+    return residual, model
+
+
+def classify_driver_stability(
+    correlations: dict[int, float | None], observations: dict[int, int]
+) -> tuple[str, str]:
+    values = [correlations.get(window) for window in PRIMARY_WINDOWS]
+    if observations.get(120, 0) < 120 or values[0] is None:
+        return "Unavailable", "120日分の共通観測がありません"
+    valid = [float(value) for value in values if value is not None and not pd.isna(value)]
+    if len(valid) < 3:
+        return "Low", "複数期間を比較できません"
+    if max(abs(value) for value in valid) < 0.15 or abs(valid[0]) < 0.10:
+        return "Low", "符号が揃っていても関係は弱いです"
+    signs = [1 if value > 0.05 else -1 if value < -0.05 else 0 for value in valid]
+    same_sign = 0 not in signs and len(set(signs)) == 1
+    correlation_range = max(valid) - min(valid)
+    strong_windows = sum(abs(value) >= 0.20 for value in valid)
+    if same_sign and abs(valid[0]) >= 0.25 and strong_windows >= 2 and correlation_range <= 0.30:
+        direction = "正" if signs[0] > 0 else "負"
+        return "High", f"複数期間で一貫した{direction}の関係"
+    matching_120 = sum((value > 0) == (valid[0] > 0) for value in valid)
+    if abs(valid[0]) >= 0.15 and matching_120 >= 2 and strong_windows >= 2 and correlation_range <= 0.50:
+        return "Medium", "中長期の方向は概ね共通ですが、強さは変動しています"
+    return "Low", "期間によって方向または強さが安定していません"
+
+
+def top_observed_correlations(
+    observed: pd.DataFrame, ticker: str, limit: int = 3
+) -> pd.DataFrame:
+    if observed.empty:
+        return observed.copy()
+    selected = observed[
+        observed["ticker"].eq(ticker) & ~observed["macro"].eq(MARKET_PROXY_NAME)
+    ].copy()
+    selected["absolute_correlation"] = pd.to_numeric(selected["correlation_120d"], errors="coerce").abs()
+    return selected.dropna(subset=["absolute_correlation"]).nlargest(limit, "absolute_correlation")
+
+
+def _market_exposure(
+    stock_prices: pd.Series,
+    topix_quality: PriceQualityResult,
+    relative_1m: object,
+    relative_3m: object,
+) -> tuple[dict[str, object], pd.Series]:
+    base = {
+        "status": "Unavailable",
+        "market_beta_252d": None,
+        "market_beta_120d": None,
+        "topix_correlation_252d": None,
+        "topix_correlation_120d": None,
+        "relative_1m": relative_1m,
+        "relative_3m": relative_3m,
+        "beta_stability": "Unavailable",
+        "beta_observations_252d": 0,
+        "beta_observations_120d": 0,
+        "recent_residual_3m": None,
+        "reason": "",
+    }
+    if stock_prices.dropna().empty:
+        return {**base, "reason": "株価を取得できません"}, pd.Series(dtype=float)
+    if not topix_quality.usable:
+        return {**base, "reason": topix_quality.reason or "TOPIX Proxyの品質を確認できません"}, pd.Series(dtype=float)
+    residual, long_model = residual_returns(stock_prices, topix_quality.series)
+    frame, _ = build_daily_change_frame(
+        {"stock": stock_prices, "market": topix_quality.series},
+        {"stock": "return", "market": "return"},
+    )
+    short_model = estimate_market_model(
+        frame["stock"], frame["market"], window=SHORT_BETA_WINDOW, minimum_observations=SHORT_BETA_MINIMUM
+    )
+    if not long_model["available"]:
+        return {**base, "beta_observations_252d": long_model["observations"], "reason": str(long_model["reason"])}, residual
+    beta_252 = float(long_model["beta"])
+    beta_120 = float(short_model["beta"]) if short_model["available"] else None
+    beta_stability = "Unavailable" if beta_120 is None else (
+        "Unstable" if abs(beta_252 - beta_120) >= BETA_UNSTABLE_THRESHOLD else "Stable"
+    )
+    recent_residual = residual.tail(63).sum() if not residual.empty else None
+    return {
+        **base,
+        "status": "Available",
+        "market_beta_252d": beta_252,
+        "market_beta_120d": beta_120,
+        "topix_correlation_252d": long_model["correlation"],
+        "topix_correlation_120d": short_model.get("correlation"),
+        "beta_stability": beta_stability,
+        "beta_observations_252d": long_model["observations"],
+        "beta_observations_120d": short_model["observations"],
+        "recent_residual_3m": None if recent_residual is None else float(recent_residual),
+        "reason": topix_quality.reason,
+    }, residual
+
+
+def _primary_driver_rows(
+    stock: dict[str, object], residual: pd.Series, macro_series: dict[str, pd.Series]
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for driver in stock["primary_drivers"]:
+        proxy = MACRO_PROXY_MAP.get(str(driver))
+        identity = {**_stock_identity(stock), "driver": str(driver), "proxy": proxy}
+        if proxy == MARKET_PROXY_NAME:
+            rows.append({**identity, **_unavailable_driver("TOPIXはMarket Exposureで確認します")})
+            continue
+        if proxy is None:
+            rows.append({**identity, **_unavailable_driver("Proxy not available")})
+            continue
+        if proxy in seen:
+            continue
+        seen.add(proxy)
+        macro = macro_series.get(proxy, pd.Series(dtype=float))
+        if residual.empty or macro.dropna().empty:
+            rows.append({**identity, **_unavailable_driver("Residual ReturnまたはDriverデータがありません")})
+            continue
+        transformed, _ = build_daily_change_frame({"macro": macro}, {"macro": _macro_method(proxy)})
+        pair = pd.concat({"residual": residual, "macro": transformed["macro"]}, axis=1).dropna()
+        correlations = {window: _tail_correlation(pair, window) for window in PRIMARY_WINDOWS}
+        observations = {window: min(len(pair), window) for window in PRIMARY_WINDOWS}
+        stability, reason = classify_driver_stability(correlations, observations)
+        corr120 = correlations[120]
+        direction = "Weak" if corr120 is None or abs(corr120) < 0.10 else ("Positive" if corr120 > 0 else "Negative")
+        rows.append({
+            **identity,
+            "status": "Available" if corr120 is not None else "Unavailable",
+            "correlation_120d": corr120,
+            "correlation_60d": correlations[60],
+            "correlation_20d": correlations[20],
+            "observations_120d": observations[120],
+            "observations_60d": observations[60],
+            "observations_20d": observations[20],
+            "direction": direction,
+            "stability": stability,
+            "reason": reason,
+        })
+    return rows
+
+
+def _observed_correlation_rows(
+    stock: dict[str, object], residual: pd.Series, macro_series: dict[str, pd.Series]
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    if residual.empty:
+        return rows
+    for name, macro in macro_series.items():
+        if name == MARKET_PROXY_NAME or macro.dropna().empty:
+            continue
+        transformed, _ = build_daily_change_frame({"macro": macro}, {"macro": _macro_method(name)})
+        pair = pd.concat({"residual": residual, "macro": transformed["macro"]}, axis=1).dropna()
+        rows.append({
+            **_stock_identity(stock), "macro": name,
+            "correlation_120d": _tail_correlation(pair, 120),
+            "correlation_60d": _tail_correlation(pair, 60),
+            "correlation_20d": _tail_correlation(pair, 20),
+            "observations": len(pair),
+        })
+    return rows
+
+
+def _primary_regression(
+    stock: dict[str, object], stock_prices: pd.Series, topix_quality: PriceQualityResult,
+    macro_series: dict[str, pd.Series],
+) -> dict[str, object]:
+    unavailable = {"status": "Unavailable", "observations": 0, "market_adjusted_r2": None,
+                   "driver_adjusted_r2": None, "adjusted_r2_improvement": None, "coefficients": {}}
+    if stock_prices.dropna().empty or not topix_quality.usable:
+        return unavailable
+    frame, _ = build_daily_change_frame(
+        {"stock": stock_prices, "market": topix_quality.series}, {"stock": "return", "market": "return"}
+    )
+    proxy_names = [name for name in expected_proxy_names(stock) if name != MARKET_PROXY_NAME and name in macro_series]
+    proxy_names = list(dict.fromkeys(proxy_names))
+    data = frame[["stock", "market"]].copy()
+    for proxy in proxy_names:
+        transformed, _ = build_daily_change_frame({proxy: macro_series[proxy]}, {proxy: _macro_method(proxy)})
+        data[proxy] = transformed[proxy]
+    data = data.dropna().tail(MARKET_BETA_WINDOW)
+    if len(data) < 120 or not proxy_names:
+        return {**unavailable, "observations": len(data)}
+    market_fit = _ols(data["stock"], data[["market"]])
+    driver_fit = _ols(data["stock"], data[["market", *proxy_names]])
+    if market_fit is None or driver_fit is None:
+        return {**unavailable, "observations": len(data)}
+    return {
+        "status": "Available", "observations": len(data),
+        "market_adjusted_r2": market_fit["adjusted_r2"],
+        "driver_adjusted_r2": driver_fit["adjusted_r2"],
+        "adjusted_r2_improvement": driver_fit["adjusted_r2"] - market_fit["adjusted_r2"],
+        "coefficients": {name: driver_fit["coefficients"].get(name) for name in proxy_names},
+    }
+
+
+def classify_macro_explainability(
+    exposure: dict[str, object], drivers: list[dict[str, object]], regression: dict[str, object]
+) -> dict[str, object]:
+    available = [row for row in drivers if row.get("status") == "Available"]
+    if exposure["status"] != "Available" or not available:
+        return {"classification": "Unavailable", "reason": "市場調整後分析または利用可能なPrimary Driverがありません"}
+    improvement = regression.get("adjusted_r2_improvement")
+    improvement_value = float(improvement) if improvement is not None and not pd.isna(improvement) else None
+    strongest = max(abs(float(row["correlation_120d"])) for row in available if row["correlation_120d"] is not None)
+    stability = {str(row["stability"]) for row in available}
+    residual_3m = exposure.get("recent_residual_3m")
+    large_unexplained = residual_3m is not None and abs(float(residual_3m)) >= 10
+    if strongest < 0.15 and (improvement_value is None or improvement_value <= 0.005) and large_unexplained:
+        return {"classification": "Macro-unexplained", "reason": "最近の値動きが大きい一方、現在登録されたPrimary Driverでは十分説明できません"}
+    if "High" in stability and improvement_value is not None and improvement_value >= 0.02:
+        return {"classification": "High", "reason": "安定したPrimary Driverがあり、回帰の説明力も改善しています"}
+    if ("High" in stability or "Medium" in stability) and improvement_value is not None and improvement_value > 0:
+        return {"classification": "Medium", "reason": "Primary Driverとの関係は見られますが、安定性または説明力は限定的です"}
+    return {"classification": "Low", "reason": "現在登録されたPrimary Driverの関係または説明力は限定的です"}
+
+
+def _ols(y: pd.Series, x: pd.DataFrame) -> dict[str, object] | None:
+    data = pd.concat({"y": y, **{name: x[name] for name in x.columns}}, axis=1).dropna()
+    n, predictors = len(data), len(x.columns)
+    if n <= predictors + 2:
+        return None
+    design = np.column_stack([np.ones(n), data[list(x.columns)].to_numpy(dtype=float)])
+    try:
+        coefficients, _, _, _ = np.linalg.lstsq(design, data["y"].to_numpy(dtype=float), rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    fitted = design @ coefficients
+    residual = data["y"].to_numpy(dtype=float) - fitted
+    total = float(((data["y"] - data["y"].mean()) ** 2).sum())
+    if total <= 0:
+        return None
+    r2 = 1 - float(np.dot(residual, residual)) / total
+    adjusted = 1 - (1 - r2) * (n - 1) / (n - predictors - 1)
+    return {"adjusted_r2": float(adjusted), "coefficients": {name: float(coefficients[i + 1]) for i, name in enumerate(x.columns)}}
+
+
+def _tail_correlation(pair: pd.DataFrame, window: int) -> float | None:
+    selected = pair.tail(window)
+    if len(selected) < window:
+        return None
+    value = selected.iloc[:, 0].corr(selected.iloc[:, 1])
+    return None if pd.isna(value) else float(value)
+
+
+def _unavailable_driver(reason: str) -> dict[str, object]:
+    return {"status": "Unavailable", "correlation_120d": None, "correlation_60d": None,
+            "correlation_20d": None, "observations_120d": 0, "observations_60d": 0,
+            "observations_20d": 0, "direction": "Unavailable", "stability": "Unavailable", "reason": reason}
+
+
+def _stock_identity(stock: dict[str, object]) -> dict[str, object]:
+    return {"ticker": stock["ticker"], "code": stock["code"], "name": stock["name"]}
+
+
+def _lookup_market_value(frame: pd.DataFrame, ticker: str, column: str) -> object:
+    if frame.empty or ticker not in frame.index or column not in frame.columns:
+        return None
+    return frame.loc[ticker, column]
 
 
 def _period_returns(series: pd.Series) -> dict[str, float | None]:
