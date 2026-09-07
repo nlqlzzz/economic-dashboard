@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from japan_equity import CORE_20, build_core_snapshot, expected_proxy_names, top_observed_correlations
+from stock_detail import build_stock_detail_analysis
 
 
 def render_japan_core_equity(
@@ -13,6 +14,9 @@ def render_japan_core_equity(
     sensitivity: dict[str, pd.DataFrame],
     stock_failures: list[str] | None = None,
     macro_failures: list[str] | None = None,
+    prices: pd.DataFrame | None = None,
+    macro_series: dict[str, pd.Series] | None = None,
+    topix_quality: object | None = None,
 ) -> None:
     st.markdown("### Japan Core 20")
     st.caption(
@@ -27,6 +31,7 @@ def render_japan_core_equity(
     _render_market_map(market_map)
     _render_aggregates(sector_summary, theme_summary)
     _render_macro_sensitivity(market_map, sensitivity)
+    _render_stock_detail(market_map, sensitivity, prices, macro_series, topix_quality)
 
     failures = [*(stock_failures or []), *(macro_failures or [])]
     if failures:
@@ -141,7 +146,11 @@ def _render_macro_sensitivity(market_map: pd.DataFrame, sensitivity: dict[str, p
         for row in selected_primary.to_dict("records"):
             with st.container(border=True):
                 st.markdown(f"**{row['driver']}**")
-                st.caption(f"Proxy: {row.get('proxy') or 'Proxy not available'}")
+                proxy = row.get("proxy")
+                if _missing(proxy):
+                    st.caption("実データProxy：未設定。このDriverは現在、定量的なMacro Sensitivity分析の対象外です。")
+                else:
+                    st.caption(f"Proxy: {proxy}")
                 if row.get("status") != "Available":
                     st.write(f"Unavailable｜{row.get('reason', 'データ不足')}")
                     continue
@@ -208,6 +217,175 @@ def _selected_row(frame: pd.DataFrame, ticker: str) -> dict[str, object] | None:
     return None if selected.empty else selected.iloc[0].to_dict()
 
 
+def _render_stock_detail(
+    market_map: pd.DataFrame,
+    sensitivity: dict[str, pd.DataFrame],
+    prices: pd.DataFrame | None,
+    macro_series: dict[str, pd.Series] | None,
+    topix_quality: object | None,
+) -> None:
+    st.markdown("#### Stock Detail")
+    st.caption("市場 → Primary Driver → Core20 Anchor → 説明しにくい個別的な動きの順に、1銘柄を深掘りします。")
+    if prices is None or macro_series is None or topix_quality is None:
+        st.info("Stock Detailに必要な価格・マクロデータを取得できません。")
+        return
+    available = market_map[market_map["status"].eq("Available")]
+    options = {f"{row['name']}（{row['code']}）": row["ticker"] for _, row in available.iterrows()}
+    if not options:
+        return
+    label = st.selectbox("詳細を確認する銘柄", list(options), key="japan_core_stock_detail")
+    ticker = options[label]
+    stock = next(item for item in CORE_20 if item["ticker"] == ticker)
+    detail = build_stock_detail_analysis(
+        stock,
+        prices[ticker],
+        topix_quality,
+        macro_series,
+        CORE_20,
+        prices,
+        shared_macro_analysis=sensitivity,
+    )
+    _render_stock_snapshot(detail)
+    _render_stock_performance(detail)
+    _render_stock_market_exposure(detail)
+    _render_stock_drivers(detail)
+    _render_stock_anchors(detail)
+    _render_stock_specific_move(detail)
+    _render_stock_diagnostics(detail)
+
+
+def _render_stock_snapshot(detail: dict[str, object]) -> None:
+    stock = detail["stock"]
+    st.markdown("##### Stock Snapshot")
+    st.markdown(f"### {stock['name']}（{stock['code']}）")
+    st.caption(f"Sector: {stock['sector']}")
+    st.write("**Primary Themes:** " + " / ".join(stock["macro_themes"]))
+    st.write("**Primary Drivers:** " + " / ".join(stock["primary_drivers"]))
+    st.metric("現在値", _price(detail["performance"].get("current")))
+    quality = detail["quality"]
+    if quality.reason:
+        st.caption(f"価格品質: {quality.reason}")
+
+
+def _render_stock_performance(detail: dict[str, object]) -> None:
+    performance = detail["performance"]
+    st.markdown("##### Performance")
+    first = st.columns(3)
+    for column, label, field in zip(first, ("1D", "5D", "1M"), ("return_1d", "return_5d", "return_1m")):
+        column.metric(label, _percent(performance.get(field)))
+    second = st.columns(3)
+    for column, label, field in zip(second, ("3M", "6M", "1Y"), ("return_3m", "return_6m", "return_1y")):
+        column.metric(label, _percent(performance.get(field)))
+    active = st.columns(2)
+    active[0].metric("TOPIX Relative Return（1M）", _point(performance.get("relative_1m")))
+    active[1].metric("TOPIX Relative Return（3M）", _point(performance.get("relative_3m")))
+
+
+def _render_stock_market_exposure(detail: dict[str, object]) -> None:
+    exposure = detail["market_exposure"]
+    st.markdown("##### Market Exposure")
+    if exposure.get("status") != "Available":
+        st.info(f"Unavailable：{exposure.get('reason', '市場調整後分析を計算できません。')}")
+        return
+    metrics = st.columns(2)
+    metrics[0].metric("Market Beta（252D）", _number(exposure.get("market_beta_252d")))
+    metrics[1].metric("Market Beta（120D）", _number(exposure.get("market_beta_120d")))
+    metrics = st.columns(2)
+    metrics[0].metric("TOPIX Correlation（252D）", _correlation(exposure.get("topix_correlation_252d")))
+    metrics[1].metric("Beta stability", str(exposure.get("beta_stability", "Unavailable")))
+    beta = exposure.get("market_beta_252d")
+    if beta is not None:
+        if float(beta) >= 1.8:
+            st.caption("市場より値動きが大きい傾向です。固定的な投資評価ではありません。")
+        elif float(beta) < 0.5:
+            st.caption("市場感応度が低い傾向です。固定的な投資評価ではありません。")
+
+
+def _render_stock_drivers(detail: dict[str, object]) -> None:
+    st.markdown("##### Macro Drivers")
+    for row in detail["primary_drivers"]:
+        with st.container(border=True):
+            st.markdown(f"**{row['driver']}**")
+            if _missing(row.get("proxy")):
+                st.caption("実データProxy：未設定。このDriverは現在、定量的なMacro Sensitivity分析の対象外です。")
+            else:
+                st.caption(f"Proxy: {row['proxy']}")
+            if row.get("status") != "Available":
+                st.write(f"Unavailable｜{row.get('reason', 'データ不足')}")
+                continue
+            st.metric("120D Residual correlation", _correlation(row.get("correlation_120d")))
+            st.write(f"60D {_correlation(row.get('correlation_60d'))}　/　20D {_correlation(row.get('correlation_20d'))}")
+            st.caption(f"Stability: {row.get('stability')}｜{row.get('reason')}")
+    explanation = detail["explainability"]
+    st.markdown("##### Macro Explainability")
+    st.markdown(f"### {explanation.get('classification', 'Unavailable')}")
+    st.caption(str(explanation.get("reason", "")))
+
+
+def _render_stock_anchors(detail: dict[str, object]) -> None:
+    st.markdown("##### Core20 Anchors / Relative Behavior")
+    anchors = detail["anchors"]
+    if not anchors:
+        st.info("Strong Anchor not available：比較する意味が十分に強いCore20参照銘柄がありません。")
+        return
+    for anchor in anchors:
+        with st.container(border=True):
+            st.markdown(f"**{anchor['name']}（{anchor['code']}）**")
+            st.caption("｜".join(anchor["anchor_reasons"]))
+            if anchor["status"] != "Available":
+                st.write("Unavailable：価格品質または取得状況を確認してください。")
+                continue
+            metrics = st.columns(2)
+            metrics[0].metric("Anchor 1M", _percent(anchor.get("return_1m")))
+            metrics[1].metric("Anchor 3M", _percent(anchor.get("return_3m")))
+            st.write(
+                f"対象との差: 1M {_point(anchor.get('return_gap_1m'))} / "
+                f"3M {_point(anchor.get('return_gap_3m'))}｜"
+                f"Anchor β {_number(anchor.get('market_beta_252d'))}"
+            )
+            st.caption(
+                f"Anchor TOPIX Relative: 1M {_point(anchor.get('relative_1m'))} / "
+                f"3M {_point(anchor.get('relative_3m'))}"
+            )
+            if anchor.get("shared_driver_sensitivities"):
+                st.caption("共通Driverの120D感応度: " + "｜".join(anchor["shared_driver_sensitivities"]))
+            if anchor.get("return_gap_3m") is not None and abs(float(anchor["return_gap_3m"])) >= 10:
+                st.caption("同じテーマのAnchorと比較して、最近の3か月リターンに大きな差があります。")
+
+
+def _render_stock_specific_move(detail: dict[str, object]) -> None:
+    st.markdown("##### Stock-specific / Unexplained Move")
+    residual = detail["residual_periods"]
+    metrics = st.columns(3)
+    metrics[0].metric("Residual 5D", _percent(residual.get("residual_5d")))
+    metrics[1].metric("Residual 1M", _percent(residual.get("residual_1m")))
+    metrics[2].metric("Residual 3M", _percent(residual.get("residual_3m")))
+    st.caption("日次Residual Returnを複利累積した近似値です。Alphaや企業固有要因を断定するものではありません。")
+    movement = detail["movement"]
+    st.markdown(f"### {movement['classification']}")
+    st.caption(movement["reason"])
+    st.markdown("##### Interpretation")
+    st.info(detail["interpretation"])
+    st.markdown("##### Next Analysis")
+    st.caption(detail["next_analysis"])
+
+
+def _render_stock_diagnostics(detail: dict[str, object]) -> None:
+    with st.expander("Detailed Diagnosticsを見る"):
+        st.caption("Observed / Ex post correlationsはデータ観測後の相関であり、因果関係や先行性を意味しません。")
+        observed = detail["observed_correlations"]
+        if not observed.empty:
+            display = observed.copy()
+            for source, label in (("correlation_120d", "120D"), ("correlation_60d", "60D"), ("correlation_20d", "20D")):
+                display[label] = display[source].map(_correlation)
+            st.dataframe(display[["macro", "120D", "60D", "20D", "observations"]].rename(columns={"macro": "系列", "observations": "共通観測数"}), hide_index=True, width="stretch")
+        regression = detail["regression"]
+        if regression.get("status") == "Available":
+            st.write(f"Adjusted R²: Market only {_number(regression.get('market_adjusted_r2'))} → Market + Drivers {_number(regression.get('driver_adjusted_r2'))}")
+            st.caption(f"改善 {_number(regression.get('adjusted_r2_improvement'))}｜観測数 {int(regression.get('observations', 0))}｜係数 {regression.get('coefficients', {})}")
+        st.caption("株価・指数・FX・商品は日次リターン、金利は日次変化幅。米国市場系列との取引時間差は補正していません。")
+
+
 def _format_aggregate(frame: pd.DataFrame, key: str, label: str) -> pd.DataFrame:
     result = frame.copy()
     result["銘柄数"] = result["stock_count"].astype(int)
@@ -236,3 +414,12 @@ def _correlation(value: object) -> str:
 
 def _number(value: object) -> str:
     return "—" if value is None or pd.isna(value) else f"{float(value):.2f}"
+
+
+def _missing(value: object) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
