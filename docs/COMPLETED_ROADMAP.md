@@ -78,6 +78,10 @@
    - TOPIX連動ETFとのMarket Beta・相関・Active ReturnをMarket Exposureとして分離し、Primary Driverは252営業日βによる市場調整後Residual Returnとの120・60・20日相関で分析。
    - 事前定義済みPrimary Driverを主表示にし、相関の強さ・符号・期間間安定性、回帰説明力の改善からMacro Explainabilityを説明表示。データ観測後のEx post相関はTOPIXを除外して詳細表示へ移動。
    - 一時的な価格水準の往復不連続を一般化した品質検査で検知し、高確度区間だけを除外。復帰を確認できない極端変動では市場調整後分析を停止する。
+4. Stock Detail
+   - Core20の選択銘柄について、Performance、Market Exposure、Primary Driver、複利累積したMarket-adjusted Residual、Core20 Anchor比較、Stock-specific / Unexplainedの順に深掘りする画面を追加。
+   - AnchorはCore20マスターの共通テーマ・共通Primary Driver・セクターから透明に選び、比較理由、1・3か月リターン差、TOPIX比、Market Betaを表示。
+   - 将来の任意Tickerへ拡張可能なticker・metadata・prices・macro seriesを引数とする分析基盤とし、Proxy未設定の概念Driverは内部値を露出せず定量対象外として表示。
 
 ## Technical Roadmap
 

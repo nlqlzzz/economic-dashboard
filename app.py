@@ -1763,6 +1763,9 @@ with theme_tab:
                     core_sensitivity,
                     core_stock_failures,
                     core_macro_failures,
+                    core_prices,
+                    core_macros,
+                    topix_quality,
                 )
             except Exception as core_error:
                 st.warning(

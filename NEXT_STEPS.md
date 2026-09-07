@@ -1,6 +1,6 @@
 # 次に進める改善
 
-最終更新: 2026-09-06
+最終更新: 2026-09-07
 
 このファイルには未完了の項目だけを記載します。完了済みの項目は[`docs/COMPLETED_ROADMAP.md`](docs/COMPLETED_ROADMAP.md)へ移します。
 
@@ -67,12 +67,12 @@
 
 目的: 日本の主要大型株について、市場全体に対する強弱、テーマ、実測マクロ感応度を一つの導線で確認する。
 
-現在地: Macro Sensitivityの市場調整後Residual Return中心への再設計は完了。次の主要候補はStock Detail。
+現在地: Core 20のStock Detailまで完了。次の主要候補は、企業データを根拠・公表日・出所とともに追加するFundamentals / Earnings。
 
-1. Stock Detail（将来）
-   - Core 20一覧から銘柄を選び、価格推移、相対強度、想定ドライバー、実測相関を銘柄単位で深掘りする。
-2. Fundamentals / Earnings / News（将来）
+1. Fundamentals / Earnings / News（将来）
    - データ品質と出所を確認した上で、PER・PBR・EPS・配当、決算、ニュースを段階的に追加する。売買判定や株価予測とは分離する。
+2. Arbitrary Japanese Stock Analysis（将来）
+   - 任意Ticker入力と、Core20 Anchorを参照した市場・Macro・相対行動の比較を追加する。
 
 共通原則:
 

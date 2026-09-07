@@ -198,6 +198,7 @@ def build_macro_sensitivity_analysis(
     macro_series: dict[str, pd.Series],
     topix_quality: PriceQualityResult,
     market_map: pd.DataFrame,
+    stocks: tuple[dict[str, object], ...] | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Separate market exposure from ex-ante macro-driver relationships."""
     exposure_rows: list[dict[str, object]] = []
@@ -207,7 +208,7 @@ def build_macro_sensitivity_analysis(
     explainability_rows: list[dict[str, object]] = []
     market_lookup = market_map.set_index("ticker") if not market_map.empty else pd.DataFrame()
 
-    for stock in CORE_20:
+    for stock in stocks or CORE_20:
         ticker = str(stock["ticker"])
         stock_prices = prices[ticker] if ticker in prices else pd.Series(dtype=float)
         relative_1m = _lookup_market_value(market_lookup, ticker, "relative_1m")
@@ -236,6 +237,26 @@ def build_macro_sensitivity_analysis(
         "regression": pd.DataFrame(regression_rows),
         "explainability": pd.DataFrame(explainability_rows),
     }
+
+
+def summarize_stock_performance(stock_prices: pd.Series, topix_prices: pd.Series) -> dict[str, float | None]:
+    """Return reusable performance fields for a Core 20 or future arbitrary ticker."""
+    stock_returns = _period_returns(stock_prices)
+    topix_returns = _period_returns(topix_prices)
+    return {
+        **stock_returns,
+        "relative_1m": _difference(stock_returns["return_1m"], topix_returns["return_1m"]),
+        "relative_3m": _difference(stock_returns["return_3m"], topix_returns["return_3m"]),
+        "relative_6m": _difference(stock_returns["return_6m"], topix_returns["return_6m"]),
+    }
+
+
+def cumulative_residual_return(residual: pd.Series, sessions: int) -> float | None:
+    """Compound daily model residuals expressed in percentage points."""
+    clean = pd.to_numeric(residual, errors="coerce").dropna().tail(sessions)
+    if len(clean) < sessions:
+        return None
+    return float(((1 + clean / 100).prod() - 1) * 100)
 
 
 def estimate_market_model(
@@ -357,7 +378,7 @@ def _market_exposure(
     beta_stability = "Unavailable" if beta_120 is None else (
         "Unstable" if abs(beta_252 - beta_120) >= BETA_UNSTABLE_THRESHOLD else "Stable"
     )
-    recent_residual = residual.tail(63).sum() if not residual.empty else None
+    recent_residual = cumulative_residual_return(residual, 63)
     return {
         **base,
         "status": "Available",
@@ -395,7 +416,7 @@ def _primary_driver_rows(
             rows.append({**identity, **_unavailable_driver("Residual ReturnまたはDriverデータがありません")})
             continue
         transformed, _ = build_daily_change_frame({"macro": macro}, {"macro": _macro_method(proxy)})
-        pair = pd.concat({"residual": residual, "macro": transformed["macro"]}, axis=1).dropna()
+        pair = pd.concat({"residual": residual, "macro": transformed["macro"]}, axis=1, sort=False).dropna()
         correlations = {window: _tail_correlation(pair, window) for window in PRIMARY_WINDOWS}
         observations = {window: min(len(pair), window) for window in PRIMARY_WINDOWS}
         stability, reason = classify_driver_stability(correlations, observations)
@@ -427,7 +448,7 @@ def _observed_correlation_rows(
         if name == MARKET_PROXY_NAME or macro.dropna().empty:
             continue
         transformed, _ = build_daily_change_frame({"macro": macro}, {"macro": _macro_method(name)})
-        pair = pd.concat({"residual": residual, "macro": transformed["macro"]}, axis=1).dropna()
+        pair = pd.concat({"residual": residual, "macro": transformed["macro"]}, axis=1, sort=False).dropna()
         rows.append({
             **_stock_identity(stock), "macro": name,
             "correlation_120d": _tail_correlation(pair, 120),
@@ -543,6 +564,8 @@ def _period_returns(series: pd.Series) -> dict[str, float | None]:
         "return_5d": _positional_return(clean, 5),
         "return_1m": _calendar_return(clean, months=1),
         "return_3m": _calendar_return(clean, months=3),
+        "return_6m": _calendar_return(clean, months=6),
+        "return_1y": _calendar_return(clean, months=12),
     }
 
 
