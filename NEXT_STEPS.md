@@ -1,6 +1,6 @@
 # 次に進める改善
 
-最終更新: 2026-09-07
+最終更新: 2026-09-08
 
 このファイルには未完了の項目だけを記載します。完了済みの項目は[`docs/COMPLETED_ROADMAP.md`](docs/COMPLETED_ROADMAP.md)へ移します。
 
@@ -67,9 +67,10 @@
 
 目的: 日本の主要大型株について、市場全体に対する強弱、テーマ、実測マクロ感応度を一つの導線で確認する。
 
-現在地: Core 20のStock Detailまで完了。次の主要候補は、企業データを根拠・公表日・出所とともに追加するFundamentals / Earnings。
+現在地: Core 20のStock Detailまで完了。Fundamentals / EarningsはYahoo Finance由来の日本株四半期P/L履歴がCore20横断で不十分なため、公式・構造化データ経路の確立後に再開する。
 
 1. Fundamentals / Earnings / News（将来）
+   - EDINET APIの利用可否、APIキー・Secret管理、XBRLの単独/累計・会計基準・提出日を正規化する設計を先に確立する。Yahoo Finance由来の日本株四半期P/LはCore20で十分な履歴が得られず、Earnings Trend / Momentumへは使用しない。
    - データ品質と出所を確認した上で、PER・PBR・EPS・配当、決算、ニュースを段階的に追加する。売買判定や株価予測とは分離する。
 2. Arbitrary Japanese Stock Analysis（将来）
    - 任意Ticker入力と、Core20 Anchorを参照した市場・Macro・相対行動の比較を追加する。
