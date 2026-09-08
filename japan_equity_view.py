@@ -258,10 +258,11 @@ def _render_stock_snapshot(detail: dict[str, object]) -> None:
     stock = detail["stock"]
     st.markdown("##### Stock Snapshot")
     st.markdown(f"### {stock['name']}（{stock['code']}）")
-    st.caption(f"Sector: {stock['sector']}")
-    st.write("**Primary Themes:** " + " / ".join(stock["macro_themes"]))
-    st.write("**Primary Drivers:** " + " / ".join(stock["primary_drivers"]))
-    st.metric("現在値", _price(detail["performance"].get("current")))
+    st.markdown(
+        f"{stock['sector']}　｜　**現在値 {_price(detail['performance'].get('current'))}**"
+    )
+    st.caption("テーマ: " + " / ".join(stock["macro_themes"]))
+    st.caption("Primary Drivers: " + " / ".join(stock["primary_drivers"]))
     quality = detail["quality"]
     if quality.reason:
         st.caption(f"価格品質: {quality.reason}")
@@ -270,15 +271,24 @@ def _render_stock_snapshot(detail: dict[str, object]) -> None:
 def _render_stock_performance(detail: dict[str, object]) -> None:
     performance = detail["performance"]
     st.markdown("##### Performance")
-    first = st.columns(3)
-    for column, label, field in zip(first, ("1D", "5D", "1M"), ("return_1d", "return_5d", "return_1m")):
-        column.metric(label, _percent(performance.get(field)))
-    second = st.columns(3)
-    for column, label, field in zip(second, ("3M", "6M", "1Y"), ("return_3m", "return_6m", "return_1y")):
-        column.metric(label, _percent(performance.get(field)))
-    active = st.columns(2)
-    active[0].metric("TOPIX Relative Return（1M）", _point(performance.get("relative_1m")))
-    active[1].metric("TOPIX Relative Return（3M）", _point(performance.get("relative_3m")))
+    st.markdown(
+        f"**1M** {_percent(performance.get('return_1m'))}　　"
+        f"**3M** {_percent(performance.get('return_3m'))}"
+    )
+    st.caption(
+        f"TOPIX比　1M {_point(performance.get('relative_1m'))}　／　"
+        f"3M {_point(performance.get('relative_3m'))}"
+    )
+    with st.expander("短期・長期パフォーマンスを見る"):
+        st.markdown(
+            f"**1D** {_percent(performance.get('return_1d'))}　　"
+            f"**5D** {_percent(performance.get('return_5d'))}"
+        )
+        st.markdown(
+            f"**6M** {_percent(performance.get('return_6m'))}　　"
+            f"**1Y** {_percent(performance.get('return_1y'))}"
+        )
+        st.caption(f"TOPIX比　6M {_point(performance.get('relative_6m'))}")
 
 
 def _render_stock_market_exposure(detail: dict[str, object]) -> None:
