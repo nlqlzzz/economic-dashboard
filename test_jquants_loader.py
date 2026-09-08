@@ -10,6 +10,7 @@ from jquants_loader import (
     assess_coverage,
     derive_standalone_quarters,
     fetch_financial_summaries,
+    get_jquants_api_key,
     normalize_financial_summaries,
     to_jquants_code,
 )
@@ -35,8 +36,10 @@ class JQuantsCodeTest(unittest.TestCase):
 
 class JQuantsNormalizationTest(unittest.TestCase):
     def setUp(self) -> None:
+        raw = _raw_rows().copy()
+        raw["DocType"] = raw["DocType"].str.replace("Consolidated", "FinancialStatements_Consolidated", regex=False)
         self.normalized = normalize_financial_summaries(
-            _raw_rows(), ticker_by_code={"7203": "7203.T"}, company_by_code={"7203": "トヨタ自動車"}, fetched_at="2026-09-09T00:00:00+00:00"
+            raw, ticker_by_code={"7203": "7203.T"}, company_by_code={"7203": "トヨタ自動車"}, fetched_at="2026-09-09T00:00:00+00:00"
         )
 
     def test_normalizes_source_neutral_schema_without_release_date_guessing(self) -> None:
@@ -47,6 +50,16 @@ class JQuantsNormalizationTest(unittest.TestCase):
         self.assertTrue(row["is_cumulative"])
         self.assertFalse(row["is_derived"])
         self.assertEqual(row["accounting_standard"], "Japan GAAP")
+
+    def test_normalizes_jquants_one_q_period_label_and_epoch_milliseconds(self) -> None:
+        raw = _raw_rows().iloc[:1].copy()
+        raw.loc[:, "CurPerType"] = "1Q"
+        raw["DiscDate"] = raw["DiscDate"].astype(object)
+        raw.loc[:, "DiscDate"] = 1754006400000
+        result = normalize_financial_summaries(raw, ticker_by_code={"7203": "7203.T"})
+        row = result[result.metric.eq("revenue")].iloc[0]
+        self.assertEqual(row["fiscal_quarter"], "Q1")
+        self.assertEqual(row["disclosure_date"], "2025-08-01")
 
     def test_derived_quarters_require_explicit_cumulative_definition(self) -> None:
         derived = derive_standalone_quarters(self.normalized)
@@ -82,6 +95,10 @@ class JQuantsNormalizationTest(unittest.TestCase):
 
 
 class JQuantsFetchTest(unittest.TestCase):
+    def test_local_streamlit_secret_is_a_safe_fallback_for_standalone_tools(self) -> None:
+        with patch.dict(os.environ, {"JQUANTS_API_KEY": ""}, clear=False), patch("jquants_loader._read_streamlit_runtime_secret", return_value=None), patch("jquants_loader._read_local_streamlit_secret", return_value="test-key"):
+            self.assertEqual(get_jquants_api_key(), "test-key")
+
     def test_missing_key_fails_safely(self) -> None:
         with patch.dict(os.environ, {"JQUANTS_API_KEY": ""}, clear=False), patch("jquants_loader.get_jquants_api_key", return_value=None):
             with self.assertRaises(JQuantsConfigurationError):

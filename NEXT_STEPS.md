@@ -67,11 +67,12 @@
 
 目的: 日本の主要大型株について、市場全体に対する強弱、テーマ、実測マクロ感応度を一つの導線で確認する。
 
-現在地: Core 20のStock Detailまで完了。Fundamentals / EarningsはYahoo Finance由来の日本株四半期P/L履歴がCore20横断で不十分なため、公式・構造化データ経路の確立後に再開する。
+現在地: Core 20のStock DetailとJ-Quants Financial SummaryによるFundamentals / Earnings v1まで完了。次の日本株候補はNews / Corporate Eventsである。
 
 1. Fundamentals / Earnings / News（将来）
    - J-Quants API V2 Financial Summaryを第一候補として、Core20の実データでRevenue、Operating Profit、Net Income、EPS、Forecast、8四半期履歴、開示日、累計/単独定義を診断する。取得層・安全な正規化・fixtureテストは用意済みだが、APIキー未設定のためGo / No-Goは未判定。本番UIへは実測で十分な品質を確認した場合だけ統合する。
    - J-Quantsが不足する場合に限り、TDnetの決算短信・業績修正とEDINET APIのXBRLを候補として調査する。Yahoo Finance由来の日本株四半期P/LはCore20で十分な履歴が得られず、Earnings Trend / Momentumへは使用しない。
+   - 次段階はNews / Corporate Events。TDnetの適時開示、決算発表、業績予想修正、自社株買い、増資、M&A、大型受注、経営方針変更を、原因断定を避けてStock Detailの説明不足を確認する材料として検討する。
    - データ品質と出所を確認した上で、PER・PBR・EPS・配当、決算、ニュースを段階的に追加する。売買判定や株価予測とは分離する。
 2. Arbitrary Japanese Stock Analysis（将来）
    - 任意Ticker入力と、Core20 Anchorを参照した市場・Macro・相対行動の比較を追加する。

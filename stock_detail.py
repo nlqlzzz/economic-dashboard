@@ -53,6 +53,7 @@ def build_stock_detail_analysis(
     reference_prices: pd.DataFrame,
     *,
     shared_macro_analysis: dict[str, pd.DataFrame] | None = None,
+    fundamentals: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build a ticker-driven detail payload without assuming the ticker is Core 20."""
     stock_quality = inspect_price_series(stock_prices)
@@ -77,6 +78,7 @@ def build_stock_detail_analysis(
         stock, performance, macro, anchors, reference_prices, usable_topix, shared_macro_analysis
     )
     movement = classify_stock_specific_move(macro, residual_periods, anchor_comparison)
+    fundamentals = fundamentals or {"status": "Unavailable"}
     return {
         "stock": dict(stock),
         "quality": stock_quality,
@@ -89,8 +91,9 @@ def build_stock_detail_analysis(
         "residual_periods": residual_periods,
         "anchors": anchor_comparison,
         "movement": movement,
-        "interpretation": build_interpretation(stock, macro, residual_periods, movement),
+        "interpretation": build_interpretation(stock, macro, residual_periods, movement, fundamentals),
         "next_analysis": next_analysis_guidance(macro, movement),
+        "fundamentals": fundamentals,
     }
 
 
@@ -130,10 +133,16 @@ def build_interpretation(
     macro: Mapping[str, object],
     residual_periods: Mapping[str, float | None],
     movement: Mapping[str, str],
+    fundamentals: Mapping[str, object] | None = None,
 ) -> str:
     explainability = str(macro.get("explainability", {}).get("classification", "Unavailable"))
+    earnings = str((fundamentals or {}).get("momentum", "Unavailable"))
     drivers = [row for row in macro.get("primary_drivers", []) if row.get("stability") == "High"]
     if movement["classification"] == "Stock-specific / Unexplained":
+        if earnings in {"Strong", "Improving"}:
+            return "Market / Macroでの説明力は限定的ですが、直近Earningsの改善とは一定の整合性があります。原因を断定せず、企業固有材料も確認候補です。"
+        if earnings in {"Weakening", "Mixed"}:
+            return "Market / Macroおよび直近Earningsの双方では、最近の値動きを十分説明できていません。News / Corporate Eventsの確認候補です。"
         return (
             "TOPIX比・市場調整後Residualに注目すべき動きが残る一方、現在登録されているPrimary Driverの説明力は限定的です。"
             "企業固有要因を確認する価値があります。"
@@ -141,7 +150,8 @@ def build_interpretation(
     if drivers:
         driver = drivers[0]
         direction = "正" if float(driver["correlation_120d"]) > 0 else "負"
-        return f"市場調整後も{driver['driver']}との{direction}の関係が複数期間で確認されています。最近の値動きはMacroとの整合性が比較的高い状態です。"
+        suffix = " Macro環境と直近Earningsは同方向です。" if earnings in {"Strong", "Improving"} else ""
+        return f"市場調整後も{driver['driver']}との{direction}の関係が複数期間で確認されています。最近の値動きはMacroとの整合性が比較的高い状態です。{suffix}"
     if explainability == "Unavailable":
         return "市場調整後の定量分析に必要なデータまたはPrimary Driver Proxyが不足しています。"
     return "Primary Driverとの関係は確認できますが、期間ごとの安定性または説明力は限定的です。"

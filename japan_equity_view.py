@@ -5,6 +5,8 @@ import streamlit as st
 
 from japan_equity import CORE_20, build_core_snapshot, expected_proxy_names, top_observed_correlations
 from stock_detail import build_stock_detail_analysis
+from fundamentals import build_fundamentals_summary
+from jquants_loader import JQuantsConfigurationError, fetch_financial_summaries, normalize_financial_summaries
 
 
 def render_japan_core_equity(
@@ -244,14 +246,54 @@ def _render_stock_detail(
         CORE_20,
         prices,
         shared_macro_analysis=sensitivity,
+        fundamentals=_load_fundamentals(str(stock["code"]), str(stock["ticker"]), str(stock["name"]), str(stock["sector"])),
     )
     _render_stock_snapshot(detail)
     _render_stock_performance(detail)
     _render_stock_market_exposure(detail)
     _render_stock_drivers(detail)
     _render_stock_anchors(detail)
+    _render_fundamentals(detail)
     _render_stock_specific_move(detail)
     _render_stock_diagnostics(detail)
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _load_fundamentals(code: str, ticker: str, name: str, sector: str) -> dict[str, object]:
+    try:
+        loaded = fetch_financial_summaries([code])
+        records = normalize_financial_summaries(loaded.records, ticker_by_code={code: ticker}, company_by_code={code: name}, fetched_at=loaded.fetched_at)
+        return build_fundamentals_summary(records, sector)
+    except JQuantsConfigurationError:
+        return {"status": "Unavailable", "reason": "J-Quants API Keyが未設定です。"}
+    except Exception:
+        return {"status": "Unavailable", "reason": "Fundamentalsを一時取得できません。"}
+
+
+def _render_fundamentals(detail: dict[str, object]) -> None:
+    data = detail["fundamentals"]
+    st.markdown("##### Fundamentals / Earnings")
+    if data.get("status") != "Available":
+        st.info("Unavailable：" + str(data.get("reason", "Fundamentalsデータを取得できません。")))
+        return
+    latest = data["latest"].set_index("metric")
+    st.markdown("**Latest Earnings**　" + str(data["history_status"]))
+    for metric, label in (("revenue", "Revenue"), ("net_income", "Net Income"), ("eps", "EPS"), ("operating_profit", "Operating Profit")):
+        if metric in latest.index:
+            row = latest.loc[metric]
+            st.write(f"{label}: {float(row['value']):,.1f}　YoY {_percent(row.get('yoy'))}")
+    st.caption(f"対象期: {latest.iloc[0].get('fiscal_year')} {latest.iloc[0].get('fiscal_quarter')}｜開示日: {latest.iloc[0].get('disclosure_date')}｜Source: {data['source']}")
+    st.markdown(f"**Earnings Momentum: {data['momentum']}**")
+    st.caption(f"Operating Profit: {data['operating_status']}。Revenueは業種により経済的意味が完全には同一でありません。")
+    with st.expander("Quarterly Trend / Forecast / Detailed financial recordsを見る"):
+        history = data["history"].copy()
+        if not history.empty:
+            history["YoY"] = history["yoy"].map(_percent)
+            st.dataframe(history[["metric", "fiscal_year", "fiscal_quarter", "value", "YoY", "is_derived", "disclosure_date"]], hide_index=True, width="stretch")
+        forecast = data["forecast"]
+        if not forecast.empty:
+            st.markdown("**Latest Forecast**")
+            st.dataframe(forecast[["metric", "value", "fiscal_year", "disclosure_date"]], hide_index=True, width="stretch")
 
 
 def _render_stock_snapshot(detail: dict[str, object]) -> None:

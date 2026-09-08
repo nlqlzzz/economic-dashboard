@@ -12,7 +12,9 @@ import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+import tomllib
 
 import pandas as pd
 
@@ -43,12 +45,31 @@ def get_jquants_api_key() -> str | None:
     value = os.getenv("JQUANTS_API_KEY", "").strip()
     if value:
         return value
+    secret = _read_streamlit_runtime_secret()
+    if secret:
+        return secret
+    return _read_local_streamlit_secret()
+
+
+def _read_streamlit_runtime_secret() -> str | None:
     try:
         import streamlit as st
 
-        secret = st.secrets.get("JQUANTS_API_KEY", "")
-        return str(secret).strip() or None
+        value = st.secrets.get("JQUANTS_API_KEY", "")
+        return str(value).strip() or None
     except Exception:
+        # A standalone diagnostic can run outside Streamlit's project directory.
+        return None
+
+
+def _read_local_streamlit_secret() -> str | None:
+    """Read only this repository's ignored Streamlit secret for standalone tools."""
+    path = Path(__file__).resolve().parent / ".streamlit" / "secrets.toml"
+    try:
+        parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+        value = parsed.get("JQUANTS_API_KEY", "")
+        return str(value).strip() or None
+    except (OSError, tomllib.TOMLDecodeError):
         return None
 
 
@@ -167,6 +188,7 @@ def derive_standalone_quarters(records: pd.DataFrame) -> pd.DataFrame:
     key_columns = ["ticker", "code", "metric", "fiscal_year", "accounting_standard", "consolidated_flag"]
     raw = records.copy()
     raw = raw[raw["metric"].isin(("revenue", "operating_profit", "net_income", "eps"))]
+    raw = raw[raw["document_type"].fillna("").str.contains("FinancialStatements", case=False)]
     for _, group in raw.groupby(key_columns, dropna=False):
         latest = (group.sort_values("disclosure_date", na_position="first")
                        .drop_duplicates("fiscal_quarter", keep="last"))
@@ -215,7 +237,9 @@ def assess_coverage(records: pd.DataFrame, expected_tickers: Iterable[str]) -> p
     for metric in ("revenue", "operating_profit", "net_income", "eps", "forecast_revenue", "forecast_operating_profit", "forecast_net_income", "forecast_eps"):
         subset = records[records.get("metric", pd.Series(dtype=str)).eq(metric)] if not records.empty else pd.DataFrame()
         tickers = set(subset.get("ticker", pd.Series(dtype=str)).dropna()) if not subset.empty else set()
-        quarter_counts = subset[subset.get("fiscal_quarter", pd.Series(dtype=str)).isin(("Q1", "Q2", "Q3", "Q4"))].groupby("ticker").size() if not subset.empty else pd.Series(dtype=int)
+        actual = subset[subset.get("document_type", pd.Series(dtype=str)).fillna("").str.contains("FinancialStatements", case=False)] if not subset.empty else subset
+        actual = actual.sort_values("disclosure_date", na_position="first").drop_duplicates(["ticker", "fiscal_year", "fiscal_quarter"], keep="last") if not actual.empty else actual
+        quarter_counts = actual[actual.get("fiscal_quarter", pd.Series(dtype=str)).isin(("Q1", "Q2", "Q3", "Q4"))].groupby("ticker").size() if not actual.empty else pd.Series(dtype=int)
         rows.append({"metric": metric, "coverage": len(tickers), "coverage_total": len(expected),
                      "coverage_ratio": len(tickers) / len(expected) if expected else None,
                      "eight_quarter_coverage": int((quarter_counts >= 8).sum()),
@@ -238,7 +262,10 @@ def _utc_now() -> str:
 def _date_or_none(value: object) -> str | None:
     if value is None or pd.isna(value):
         return None
-    parsed = pd.to_datetime(value, errors="coerce")
+    if isinstance(value, (int, float)) and abs(float(value)) >= 10_000_000_000:
+        parsed = pd.to_datetime(value, unit="ms", errors="coerce")
+    else:
+        parsed = pd.to_datetime(value, errors="coerce")
     return None if pd.isna(parsed) else parsed.date().isoformat()
 
 
@@ -256,8 +283,8 @@ def _fiscal_quarter(value: object) -> str | None:
     if not text:
         return None
     upper = text.upper()
-    for candidate in ("Q1", "Q2", "Q3", "FY"):
-        if candidate in upper:
+    for candidate, aliases in (("Q1", ("Q1", "1Q")), ("Q2", ("Q2", "2Q")), ("Q3", ("Q3", "3Q")), ("FY", ("FY",))):
+        if any(alias in upper for alias in aliases):
             return candidate
     return None
 
