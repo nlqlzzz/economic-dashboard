@@ -1,6 +1,6 @@
 import unittest
 import pandas as pd
-from fundamentals import build_fundamentals_summary
+from fundamentals import build_fundamentals_cards, build_fundamentals_summary, format_eps, format_jpy, format_yoy
 
 
 def records() -> pd.DataFrame:
@@ -26,3 +26,13 @@ class FundamentalsTest(unittest.TestCase):
 
     def test_empty_data_is_unavailable(self):
         self.assertEqual(build_fundamentals_summary(pd.DataFrame(), "銀行")["status"], "Unavailable")
+
+    def test_japanese_value_formatters(self):
+        self.assertEqual(format_jpy(12_600_000_000_000), "12.6兆円")
+        self.assertEqual(format_jpy(817_200_000_000), "8,172億円")
+        self.assertEqual(format_eps(62.0), "62円")
+        self.assertEqual(format_yoy(1.9), "前年比 +1.9%")
+
+    def test_mobile_card_payload_is_compact(self):
+        cards = build_fundamentals_cards(build_fundamentals_summary(records(), "自動車"))
+        self.assertEqual([card["metric"] for card in cards], ["revenue", "net_income", "eps", "operating_profit"])
