@@ -3,13 +3,13 @@
 調査日: 2026-09-09
 
 対象: Japan Core 20（20銘柄）
-状態: **実データ診断は保留（この実行環境に `JQUANTS_API_KEY` がないため）**
+状態: **Conditional Go（2026-09-09にCore20実データを確認）**
 
 ## Executive Summary
 
 J-Quants API V2は、Yahoo Finance由来の不揃いな四半期P/Lを置き換え得る第一候補である。公式Python ClientのFinancial Summary APIには、売上高、営業利益、純利益、EPS、開示日、対象期間、決算種別、通期会社予想のフィールドがある。
 
-ただし、今回の実行環境には有効な `JQUANTS_API_KEY` が設定されていない。そのため、Core20の取得成功率、8四半期カバレッジ、実際の累計/単独定義、会計基準差、Forecastカバレッジを実測していない。**Fundamentals / Earnings v1のGo / Conditional Go / No-GoはPendingであり、本番UIは変更していない。**
+Core20のFinancial Summary取得は20/20成功した。Revenue、Net Income、EPSは20/20で取得でき、単独四半期の8期相当は各17/20だった。Operating Profitは15/20・8期12/20であり、銀行・保険を一般事業会社と同じ指標で比較できないため、全社共通指標には採用しない。ForecastはRevenue 15/20、Operating Profit 13/20、Net Income 18/20、EPS 17/20だった。
 
 代わりに、公式Clientによる低頻度の取得層、共通正規化スキーマ、累計値を誤認しない単独四半期導出、同一Fiscal Quarter間だけのYoY、fixtureテスト、再実行用スクリプトを追加した。キー設定後に実データ診断を行い、その結果だけで実装可否を判断する。
 
@@ -86,7 +86,7 @@ J-Quants実レコードの `CurPerType`、`CurPerSt`、`CurPerEn`、`CurFYSt`、
 - **Conditional Go:** 業種非適用を除けば主要Trendが可能で、Unavailableや業種差をUIで正確に分離できる。
 - **No-Go:** 定義・累計/単独・履歴の不整合によりEarnings Trendを誤認させる可能性が高い。
 
-今回の結論は **Pending**。キーなしで得られる仕様情報だけを根拠にUIを実装しない。
+今回の結論は **Conditional Go**。v1ではRevenue、Net Income、EPSを全社共通の主要指標とし、Operating Profitは取得可能かつ業種上適用可能な場合だけ表示する。8期未満はHistory Limitedとして部分表示し、欠損を補完しない。
 
 ## TDnet / EDINETの位置付け
 
