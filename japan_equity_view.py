@@ -5,7 +5,7 @@ import streamlit as st
 
 from japan_equity import CORE_20, build_core_snapshot, expected_proxy_names, top_observed_correlations
 from stock_detail import build_stock_detail_analysis
-from fundamentals import build_fundamentals_summary
+from fundamentals import build_fundamentals_cards, build_fundamentals_summary, format_eps, format_jpy, format_yoy
 from jquants_loader import JQuantsConfigurationError, fetch_financial_summaries, normalize_financial_summaries
 
 
@@ -272,28 +272,53 @@ def _load_fundamentals(code: str, ticker: str, name: str, sector: str) -> dict[s
 
 def _render_fundamentals(detail: dict[str, object]) -> None:
     data = detail["fundamentals"]
-    st.markdown("##### Fundamentals / Earnings")
+    st.markdown("##### 業績・ファンダメンタルズ")
     if data.get("status") != "Available":
-        st.info("Unavailable：" + str(data.get("reason", "Fundamentalsデータを取得できません。")))
+        st.info("取得不可：" + str(data.get("reason", "業績データを取得できません。")))
         return
-    latest = data["latest"].set_index("metric")
-    st.markdown("**Latest Earnings**　" + str(data["history_status"]))
-    for metric, label in (("revenue", "Revenue"), ("net_income", "Net Income"), ("eps", "EPS"), ("operating_profit", "Operating Profit")):
-        if metric in latest.index:
-            row = latest.loc[metric]
-            st.write(f"{label}: {float(row['value']):,.1f}　YoY {_percent(row.get('yoy'))}")
-    st.caption(f"対象期: {latest.iloc[0].get('fiscal_year')} {latest.iloc[0].get('fiscal_quarter')}｜開示日: {latest.iloc[0].get('disclosure_date')}｜Source: {data['source']}")
-    st.markdown(f"**Earnings Momentum: {data['momentum']}**")
-    st.caption(f"Operating Profit: {data['operating_status']}。Revenueは業種により経済的意味が完全には同一でありません。")
-    with st.expander("Quarterly Trend / Forecast / Detailed financial recordsを見る"):
+    st.markdown("**最新決算**　" + str(data["history_status"]))
+    cards = build_fundamentals_cards(data)
+    for start in range(0, len(cards), 2):
+        columns = st.columns(2)
+        for column, card in zip(columns, cards[start:start + 2]):
+            with column:
+                st.markdown(f"**{card['label']}**")
+                st.markdown(f"### {card['value']}")
+                st.caption(card["yoy"])
+    latest = data["latest"].iloc[0]
+    st.info(f"**業績モメンタム：{data['momentum']}**\n\n{data.get('momentum_reason', '')}")
+    if detail.get("interpretation"):
+        st.caption(f"要約: {detail['interpretation']}")
+    st.caption(f"対象期: {latest.get('fiscal_year')} {latest.get('fiscal_quarter')} ｜ 開示日: {latest.get('disclosure_date')} ｜ Source: {data['source']}")
+    tabs = st.tabs(["四半期推移", "会社予想", "詳細データ"])
+    with tabs[0]:
         history = data["history"].copy()
-        if not history.empty:
-            history["YoY"] = history["yoy"].map(_percent)
-            st.dataframe(history[["metric", "fiscal_year", "fiscal_quarter", "value", "YoY", "is_derived", "disclosure_date"]], hide_index=True, width="stretch")
+        if len(history) < 4:
+            st.info("履歴不足：推移は4四半期以上で表示します。")
+        else:
+            history["期"] = history["fiscal_year"].astype(str) + " " + history["fiscal_quarter"].astype(str)
+            for metric, label in (("revenue", "売上高等"), ("net_income", "純利益"), ("eps", "EPS"), ("operating_profit", "営業利益")):
+                series = history[history.metric.eq(metric)].set_index("期")["value"]
+                if len(series) >= 4:
+                    st.caption(label + "（単独四半期）")
+                    st.line_chart(series)
+    with tabs[1]:
         forecast = data["forecast"]
-        if not forecast.empty:
-            st.markdown("**Latest Forecast**")
-            st.dataframe(forecast[["metric", "value", "fiscal_year", "disclosure_date"]], hide_index=True, width="stretch")
+        if forecast.empty:
+            st.info("会社予想は取得できません。")
+        else:
+            labels = {"forecast_revenue": "会社予想 売上高等", "forecast_net_income": "会社予想 純利益", "forecast_eps": "会社予想 EPS", "forecast_operating_profit": "会社予想 営業利益"}
+            for _, row in forecast.iterrows():
+                value = format_eps(row["value"]) if row["metric"] == "forecast_eps" else format_jpy(row["value"])
+                st.write(f"**{labels.get(row['metric'], row['metric'])}**　{value}")
+            st.caption("最新の会社予想のみ。予想修正の方向は今回判定しません。")
+    with tabs[2]:
+        with st.expander("詳細データ・出所・導出方法を見る"):
+            history = data["history"].copy()
+            if not history.empty:
+                history["前年比"] = history["yoy"].map(format_yoy)
+                st.dataframe(history[["metric", "fiscal_year", "fiscal_quarter", "value", "前年比", "is_derived", "disclosure_date"]], hide_index=True, width="stretch")
+            st.caption("is_derived=true は累計開示から安全に導出した単独四半期です。")
 
 
 def _render_stock_snapshot(detail: dict[str, object]) -> None:
@@ -406,19 +431,17 @@ def _render_stock_anchors(detail: dict[str, object]) -> None:
 
 
 def _render_stock_specific_move(detail: dict[str, object]) -> None:
-    st.markdown("##### Stock-specific / Unexplained Move")
+    st.markdown("##### 個別要因・説明しきれない値動き")
     residual = detail["residual_periods"]
     metrics = st.columns(3)
-    metrics[0].metric("Residual 5D", _percent(residual.get("residual_5d")))
-    metrics[1].metric("Residual 1M", _percent(residual.get("residual_1m")))
-    metrics[2].metric("Residual 3M", _percent(residual.get("residual_3m")))
+    metrics[0].metric("市場調整後 5日", _percent(residual.get("residual_5d")))
+    metrics[1].metric("市場調整後 1か月", _percent(residual.get("residual_1m")))
+    metrics[2].metric("市場調整後 3か月", _percent(residual.get("residual_3m")))
     st.caption("日次Residual Returnを複利累積した近似値です。Alphaや企業固有要因を断定するものではありません。")
     movement = detail["movement"]
-    st.markdown(f"### {movement['classification']}")
+    st.markdown(f"### 判定: {movement['classification']}")
     st.caption(movement["reason"])
-    st.markdown("##### Interpretation")
-    st.info(detail["interpretation"])
-    st.markdown("##### Next Analysis")
+    st.markdown("##### 次に確認すること")
     st.caption(detail["next_analysis"])
 
 
