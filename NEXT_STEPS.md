@@ -1,6 +1,6 @@
 # 次に進める改善
 
-最終更新: 2026-09-08
+最終更新: 2026-09-10
 
 このファイルには未完了の項目だけを記載します。完了済みの項目は[`docs/COMPLETED_ROADMAP.md`](docs/COMPLETED_ROADMAP.md)へ移します。
 
@@ -67,13 +67,13 @@
 
 目的: 日本の主要大型株について、市場全体に対する強弱、テーマ、実測マクロ感応度を一つの導線で確認する。
 
-現在地: Core 20のStock DetailとJ-Quants Financial SummaryによるFundamentals / Earnings v1まで完了。次の日本株候補はNews / Corporate Eventsである。
+現在地: Core 20のStock Detail、J-Quants Financial SummaryによるFundamentals / Earnings v1、モバイル向けFundamentals UI polishまで完了。次の日本株候補はNews / Corporate Eventsである。
 
-1. Fundamentals / Earnings / News（将来）
-   - J-Quants API V2 Financial Summaryを第一候補として、Core20の実データでRevenue、Operating Profit、Net Income、EPS、Forecast、8四半期履歴、開示日、累計/単独定義を診断する。取得層・安全な正規化・fixtureテストは用意済みだが、APIキー未設定のためGo / No-Goは未判定。本番UIへは実測で十分な品質を確認した場合だけ統合する。
-   - J-Quantsが不足する場合に限り、TDnetの決算短信・業績修正とEDINET APIのXBRLを候補として調査する。Yahoo Finance由来の日本株四半期P/LはCore20で十分な履歴が得られず、Earnings Trend / Momentumへは使用しない。
-   - 次段階はNews / Corporate Events。TDnetの適時開示、決算発表、業績予想修正、自社株買い、増資、M&A、大型受注、経営方針変更を、原因断定を避けてStock Detailの説明不足を確認する材料として検討する。
-   - データ品質と出所を確認した上で、PER・PBR・EPS・配当、決算、ニュースを段階的に追加する。売買判定や株価予測とは分離する。
+1. News / Corporate Events（次段階）
+   - Fundamentals / Earnings v1はJ-Quants API V2 Financial Summaryを利用して実装済み。Core20の実データ診断はConditional Goで、Revenue・Net Income・EPSを共通の主要指標、Operating Profitを取得可能かつ業種上適切な場合の補助指標として扱う。
+   - 次段階ではTDnetの適時開示、決算発表、業績予想修正、自社株買い、増資、M&A、大型受注、経営方針変更を、原因断定を避けてStock Detailの説明不足を確認する材料として検討する。
+   - TDnetで不足する詳細Fundamentalsが必要になった場合に限り、EDINET APIのXBRLを候補として調査する。Yahoo Finance由来の日本株四半期P/LはCore20で十分な履歴が得られず、Earnings Trend / Momentumへは使用しない。
+   - Historical Valuation、Analyst Consensus、任意銘柄へのFundamentals拡張は、News / Corporate Eventsの基盤を確認した後に段階的に検討する。売買判定や株価予測とは分離する。
 2. Arbitrary Japanese Stock Analysis（将来）
    - 任意Ticker入力と、Core20 Anchorを参照した市場・Macro・相対行動の比較を追加する。
 
