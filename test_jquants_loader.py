@@ -51,6 +51,11 @@ class JQuantsNormalizationTest(unittest.TestCase):
         self.assertFalse(row["is_derived"])
         self.assertEqual(row["accounting_standard"], "Japan GAAP")
 
+    def test_forecast_targets_its_fiscal_year_not_current_quarter(self) -> None:
+        row = self.normalized[self.normalized.metric.eq("forecast_revenue")].iloc[0]
+        self.assertEqual(row["fiscal_quarter"], "FY")
+        self.assertEqual(row["reference_period"], "2026-03-31")
+
     def test_normalizes_jquants_one_q_period_label_and_epoch_milliseconds(self) -> None:
         raw = _raw_rows().iloc[:1].copy()
         raw.loc[:, "CurPerType"] = "1Q"

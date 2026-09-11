@@ -175,7 +175,15 @@ def normalize_financial_summaries(
                               ("FNP", "forecast_net_income"), ("FEPS", "forecast_eps")):
             value = _number_or_none(record.get(field))
             if value is not None:
-                rows.append({**base, "metric": metric, "value": value})
+                # Forecast fields are for the fiscal year ending at CurFYEn, not
+                # for the currently reported quarter.  Keep that target period
+                # explicit so a forecast is never plotted as a next-quarter fact.
+                forecast_base = (
+                    {**base, "fiscal_quarter": "FY", "reference_period": fiscal_end,
+                     "is_cumulative": True}
+                    if metric.startswith("forecast_") else base
+                )
+                rows.append({**forecast_base, "metric": metric, "value": value})
     result = pd.DataFrame(rows, columns=REQUIRED_COLUMNS)
     return result.sort_values(["ticker", "metric", "disclosure_date"], na_position="last").reset_index(drop=True) if not result.empty else result
 

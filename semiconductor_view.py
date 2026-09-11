@@ -22,6 +22,40 @@ from semiconductor_validation import (
 from theme_view import build_theme_snapshot
 
 
+STATE_LABELS = {
+    "Strong": "強い", "Improving": "改善", "Mixed": "まちまち",
+    "Weakening": "弱含み", "Unavailable": "判定不可",
+}
+REGION_LABELS = {"Taiwan": "台湾", "Korea": "韓国", "Japan": "日本"}
+
+
+def display_state(state: object) -> str:
+    """Translate UI state without changing analysis-layer enums."""
+    return STATE_LABELS.get(str(state), str(state))
+
+
+def compact_status_rows(items: list[tuple[str, dict[str, object]]]) -> list[dict[str, str]]:
+    """One-line mobile payload used by Snapshot and Pulse summaries."""
+    rows = []
+    for label, result in items:
+        evidence = result.get("evidence", [])
+        if not evidence:
+            evidence = [str(result.get("reason", "判定に必要なデータがありません。"))]
+        rows.append({"対象": label, "判定": f"{result.get('direction', '→')} {display_state(result.get('status', result.get('state', 'Unavailable')))}", "主な根拠": str(evidence[0])})
+    return rows
+
+
+def aggregate_sources(frame: pd.DataFrame) -> list[dict[str, object]]:
+    """Keep every URL while showing each provider only once in the main UI."""
+    if frame.empty or not {"source_name", "source_url"}.issubset(frame.columns):
+        return []
+    groups = []
+    for name, group in frame.dropna(subset=["source_name"]).groupby("source_name", sort=False):
+        urls = list(dict.fromkeys(str(url) for url in group["source_url"].dropna() if str(url)))
+        groups.append({"name": str(name), "url": urls[0] if urls else None, "urls": urls})
+    return groups
+
+
 def render_semiconductor_snapshot(
     theme_series: dict[str, pd.Series],
     indicator_metadata: dict[str, dict[str, object]],
@@ -46,17 +80,16 @@ def render_semiconductor_snapshot(
         ("Korea Exports", korea),
         ("Japan Cycle", japan),
     ]
-    st.markdown("#### Semiconductor Snapshot")
-    columns = st.columns(2)
-    for index, (label, result) in enumerate(items):
-        with columns[index % 2]:
-            st.metric(label, f"{result['direction']} {result['status']}")
-            evidence = result.get("evidence", [])
-            st.caption(evidence[0] if evidence else "判定に必要なデータがありません。")
+    st.markdown("#### 半導体スナップショット")
+    st.caption("市場と実需の現在地を、まず4項目で確認します。")
+    for row in compact_status_rows([( {"Taiwan Orders": "台湾", "Korea Exports": "韓国", "Japan Cycle": "日本"}.get(label, label), result) for label, result in items]):
+        with st.container(border=True):
+            st.markdown(f"**{row['対象']}　{row['判定']}**")
+            st.caption(row["主な根拠"])
     with st.expander("Snapshotの判定根拠を見る"):
         for label, result in items:
             evidence = result.get("evidence", [])
-            st.markdown(f"**{label}: {result['status']}**")
+            st.markdown(f"**{label}: {display_state(result['status'])}**")
             st.caption(" / ".join(evidence) if evidence else "利用可能な根拠なし")
     st.caption("方向判定は利用可能な系列の前年比と3か月トレンドによる説明用表示で、総合スコアや投資助言ではありません。")
 
@@ -110,20 +143,20 @@ def build_current_global_pulse(
 
 
 def render_global_semiconductor_pulse(pulse: dict[str, object]) -> None:
-    st.markdown("#### Global Semiconductor Demand Pulse")
+    st.markdown("#### 世界半導体需要")
     state = str(pulse.get("state", "Unavailable"))
-    label = "Unavailable / Limited Data" if state == "Unavailable" else state
-    st.metric("Global Semiconductor Demand", f"{pulse.get('direction', '→')} {label}")
+    label = "判定不可（データ限定）" if state == "Unavailable" else display_state(state)
+    st.metric("世界半導体需要", f"{pulse.get('direction', '→')} {label}")
     st.caption(str(pulse.get("coverage_label", "Limited Data")))
-    columns = st.columns(3)
-    for column, region in zip(columns, ("Taiwan", "Korea", "Japan")):
+    for region in ("Taiwan", "Korea", "Japan"):
         result = pulse.get("regions", {}).get(region, {"state": "Unavailable", "direction": "→"})
-        column.metric(region, f"{result.get('direction', '→')} {result.get('state', 'Unavailable')}")
-    st.write(str(pulse.get("reason", "判定に必要なデータがありません。")))
+        with st.container(border=True):
+            st.markdown(f"**{REGION_LABELS[region]}　{result.get('direction', '→')} {display_state(result.get('state', 'Unavailable'))}**")
+    st.caption(str(pulse.get("reason", "判定に必要なデータがありません。")))
     with st.expander("Global Pulseの判定根拠を見る"):
         for region in ("Taiwan", "Korea", "Japan"):
             result = pulse.get("regions", {}).get(region, {})
-            st.markdown(f"**{region}: {result.get('state', 'Unavailable')}**")
+            st.markdown(f"**{REGION_LABELS[region]}: {display_state(result.get('state', 'Unavailable'))}**")
             positives = result.get("contributors_positive", [])
             negatives = result.get("contributors_negative", [])
             missing = result.get("contributors_missing", [])
@@ -141,8 +174,8 @@ def render_price_vs_fundamentals(
         pd.Series(dtype=float) if sox_prices is None else sox_prices
     )
     result = classify_price_vs_fundamentals(market, pulse)
-    st.markdown("#### Price vs Fundamentals")
-    st.metric("SOX × Global Demand", str(result["state"]))
+    st.markdown("#### 株価と実需")
+    st.metric("SOX × 世界半導体需要", display_state(result["state"]))
     st.write(str(result["message"]))
     returns = market.get("returns", {})
     columns = st.columns(3)
@@ -231,7 +264,7 @@ def render_global_demand(
     korea_error: str | None = None,
 ) -> None:
     """台湾の受注と韓国の出荷を、部分障害を許容して表示する。"""
-    st.markdown("#### Global Demand")
+    st.markdown("#### 世界需要の詳細")
     st.caption("台湾は海外から台湾企業への『受注』、韓国は通関ベースの『輸出額』です。注文と実際の出荷を同一指標として扱いません。")
     if taiwan_error:
         st.warning(f"Taiwan Orders: 一時取得失敗。韓国・日本・市場データは引き続き表示します: {taiwan_error}")
@@ -244,7 +277,7 @@ def render_global_demand(
 
 
 def _render_taiwan_orders(frame: pd.DataFrame) -> None:
-    st.markdown("##### Taiwan Orders")
+    st.markdown("##### 台湾受注")
     if frame.empty:
         st.info("台湾輸出受注データがありません。")
         return
@@ -268,11 +301,11 @@ def _render_taiwan_orders(frame: pd.DataFrame) -> None:
     latest = frame.sort_values("reference_period").iloc[-1]
     fetched = _format_timestamp(latest["fetched_at"])
     st.caption(f"対象月: {latest['reference_period']:%Y-%m}｜公表日: 公式履歴なし｜取得日時: {fetched}。前年比・移動平均・モメンタムは当アプリ計算値です。外銷訂單は台湾からの実輸出額ではなく、海外生産分を含み得る受注統計です。")
-    st.markdown(f"データ出所: [台湾経済部 統計処 外銷訂單統計]({latest['source_url']})")
+    _render_sources(frame)
 
 
 def _render_korea_exports(frame: pd.DataFrame) -> None:
-    st.markdown("##### Korea Exports")
+    st.markdown("##### 韓国半導体輸出")
     if frame.empty:
         st.info("韓国半導体輸出データがありません。")
         return
@@ -311,11 +344,29 @@ def _render_korea_exports(frame: pd.DataFrame) -> None:
         st.caption("営業日調整値なし：前年同期を含む公式営業日数が揃わないため推計していません。")
     latest = official.iloc[-1]
     st.caption(f"最新対象期間: {latest['period_start']:%Y-%m-%d}〜{latest['period_end']:%Y-%m-%d}｜公表日: {_format_date(latest['release_date'])}｜取得日時: {_format_timestamp(latest['fetched_at'])}。輸出金額は数量×価格であり、数量需要だけを示しません。速報値は月次確報ではありません。")
-    sources = official[["source_name", "source_url"]].drop_duplicates()
-    source_links = " / ".join(
-        f"[{row.source_name}]({row.source_url})" for row in sources.itertuples()
+    _render_sources(official)
+
+
+def _render_sources(frame: pd.DataFrame) -> None:
+    sources = aggregate_sources(frame)
+    if not sources:
+        return
+    main_links = " / ".join(
+        f"[{source['name']}]({source['url']})" if source["url"] else source["name"]
+        for source in sources
     )
-    st.markdown(f"データ出所: {source_links}")
+    st.caption(f"出典: {main_links}")
+    with st.expander("出典・取得情報を見る"):
+        for source in sources:
+            st.markdown(f"**{source['name']}**")
+            for url in source["urls"]:
+                st.caption(url)
+        latest = frame.sort_values("fetched_at").iloc[-1]
+        st.caption(
+            f"対象期間: {_format_date(latest.get('period_start', latest.get('reference_period')))}〜"
+            f"{_format_date(latest.get('period_end', latest.get('reference_period')))}｜"
+            f"公表日: {_format_date(latest.get('release_date'))}｜取得日時: {_format_timestamp(latest.get('fetched_at'))}"
+        )
 
 
 def _market_direction(snapshot: pd.DataFrame, name: str) -> dict[str, object]:
