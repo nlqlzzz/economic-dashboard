@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from japan_equity import CORE_20, build_core_snapshot, expected_proxy_names, top_observed_correlations
 from stock_detail import build_stock_detail_analysis
-from fundamentals import build_fundamentals_cards, build_fundamentals_summary, format_eps, format_jpy, format_yoy
+from fundamentals import (build_annual_forecast_series, build_fundamentals_cards,
+    build_fundamentals_summary, chart_axis_ticks, format_eps, format_jpy, format_yoy)
 from jquants_loader import JQuantsConfigurationError, fetch_financial_summaries, normalize_financial_summaries
 
 
@@ -248,12 +250,17 @@ def _render_stock_detail(
         shared_macro_analysis=sensitivity,
         fundamentals=_load_fundamentals(str(stock["code"]), str(stock["ticker"]), str(stock["name"]), str(stock["sector"])),
     )
+    st.divider()
     _render_stock_snapshot(detail)
     _render_stock_performance(detail)
+    st.divider()
     _render_stock_market_exposure(detail)
     _render_stock_drivers(detail)
+    st.divider()
     _render_stock_anchors(detail)
+    st.divider()
     _render_fundamentals(detail)
+    st.divider()
     _render_stock_specific_move(detail)
     _render_stock_diagnostics(detail)
 
@@ -273,6 +280,7 @@ def _load_fundamentals(code: str, ticker: str, name: str, sector: str) -> dict[s
 def _render_fundamentals(detail: dict[str, object]) -> None:
     data = detail["fundamentals"]
     st.markdown("##### 業績・ファンダメンタルズ")
+    st.caption("開示済みの実績と、期間が一致する通期会社予想を分けて確認します。")
     if data.get("status") != "Available":
         st.info("取得不可：" + str(data.get("reason", "業績データを取得できません。")))
         return
@@ -286,10 +294,10 @@ def _render_fundamentals(detail: dict[str, object]) -> None:
                 st.markdown(f"### {card['value']}")
                 st.caption(card["yoy"])
     latest = data["latest"].iloc[0]
-    st.info(f"**業績モメンタム：{data['momentum']}**\n\n{data.get('momentum_reason', '')}")
+    st.info(f"**業績モメンタム：{_ui_state(data['momentum'])}**\n\n{data.get('momentum_reason', '')}")
     if detail.get("interpretation"):
         st.caption(f"要約: {detail['interpretation']}")
-    st.caption(f"対象期: {latest.get('fiscal_year')} {latest.get('fiscal_quarter')} ｜ 開示日: {latest.get('disclosure_date')} ｜ Source: {data['source']}")
+    st.caption(f"対象期: {latest.get('fiscal_year')} {latest.get('fiscal_quarter')} ｜ 開示日: {latest.get('disclosure_date')} ｜ 出典: {data['source']}")
     tabs = st.tabs(["四半期推移", "会社予想", "詳細データ"])
     with tabs[0]:
         history = data["history"].copy()
@@ -298,10 +306,14 @@ def _render_fundamentals(detail: dict[str, object]) -> None:
         else:
             history["期"] = history["fiscal_year"].astype(str) + " " + history["fiscal_quarter"].astype(str)
             for metric, label in (("revenue", "売上高等"), ("net_income", "純利益"), ("eps", "EPS"), ("operating_profit", "営業利益")):
-                series = history[history.metric.eq(metric)].set_index("期")["value"]
+                series = history[history.metric.eq(metric)][["期", "value"]].dropna()
                 if len(series) >= 4:
-                    st.caption(label + "（単独四半期）")
-                    st.line_chart(series)
+                    st.caption(label + "（単独四半期・実績）")
+                    _render_actual_chart(series, metric)
+                    annual = build_annual_forecast_series(data, metric)
+                    if not annual.empty and annual["会社予想"].notna().any():
+                        st.caption("通期実績・会社予想（同じFiscal Yearのみ）")
+                        _render_annual_forecast_chart(annual, metric)
     with tabs[1]:
         forecast = data["forecast"]
         if forecast.empty:
@@ -311,7 +323,7 @@ def _render_fundamentals(detail: dict[str, object]) -> None:
             for _, row in forecast.iterrows():
                 value = format_eps(row["value"]) if row["metric"] == "forecast_eps" else format_jpy(row["value"])
                 st.write(f"**{labels.get(row['metric'], row['metric'])}**　{value}")
-            st.caption("最新の会社予想のみ。予想修正の方向は今回判定しません。")
+            st.caption("会社が現在開示している通期業績予想です。四半期実績の次期値としては扱いません。")
     with tabs[2]:
         with st.expander("詳細データ・出所・導出方法を見る"):
             history = data["history"].copy()
@@ -323,13 +335,13 @@ def _render_fundamentals(detail: dict[str, object]) -> None:
 
 def _render_stock_snapshot(detail: dict[str, object]) -> None:
     stock = detail["stock"]
-    st.markdown("##### Stock Snapshot")
+    st.markdown("##### 銘柄概要")
     st.markdown(f"### {stock['name']}（{stock['code']}）")
     st.markdown(
         f"{stock['sector']}　｜　**現在値 {_price(detail['performance'].get('current'))}**"
     )
     st.caption("テーマ: " + " / ".join(stock["macro_themes"]))
-    st.caption("Primary Drivers: " + " / ".join(stock["primary_drivers"]))
+    st.caption("主なマクロ要因: " + " / ".join(stock["primary_drivers"]))
     quality = detail["quality"]
     if quality.reason:
         st.caption(f"価格品質: {quality.reason}")
@@ -337,7 +349,7 @@ def _render_stock_snapshot(detail: dict[str, object]) -> None:
 
 def _render_stock_performance(detail: dict[str, object]) -> None:
     performance = detail["performance"]
-    st.markdown("##### Performance")
+    st.markdown("##### パフォーマンス")
     st.markdown(
         f"**1M** {_percent(performance.get('return_1m'))}　　"
         f"**3M** {_percent(performance.get('return_3m'))}"
@@ -360,16 +372,17 @@ def _render_stock_performance(detail: dict[str, object]) -> None:
 
 def _render_stock_market_exposure(detail: dict[str, object]) -> None:
     exposure = detail["market_exposure"]
-    st.markdown("##### Market Exposure")
+    st.markdown("##### 市場感応度")
+    st.caption("市場全体との連動度を確認します。マクロ要因の分析とは別レイヤーです。")
     if exposure.get("status") != "Available":
-        st.info(f"Unavailable：{exposure.get('reason', '市場調整後分析を計算できません。')}")
+        st.info(f"利用不可：{exposure.get('reason', '市場調整後分析を計算できません。')}")
         return
     metrics = st.columns(2)
-    metrics[0].metric("Market Beta（252D）", _number(exposure.get("market_beta_252d")))
-    metrics[1].metric("Market Beta（120D）", _number(exposure.get("market_beta_120d")))
+    metrics[0].metric("市場ベータ（252日）", _number(exposure.get("market_beta_252d")))
+    metrics[1].metric("市場ベータ（120日）", _number(exposure.get("market_beta_120d")))
     metrics = st.columns(2)
-    metrics[0].metric("TOPIX Correlation（252D）", _correlation(exposure.get("topix_correlation_252d")))
-    metrics[1].metric("Beta stability", str(exposure.get("beta_stability", "Unavailable")))
+    metrics[0].metric("TOPIX相関（252日）", _correlation(exposure.get("topix_correlation_252d")))
+    metrics[1].metric("ベータ安定性", _ui_state(exposure.get("beta_stability", "Unavailable")))
     beta = exposure.get("market_beta_252d")
     if beta is not None:
         if float(beta) >= 1.8:
@@ -379,7 +392,8 @@ def _render_stock_market_exposure(detail: dict[str, object]) -> None:
 
 
 def _render_stock_drivers(detail: dict[str, object]) -> None:
-    st.markdown("##### Macro Drivers")
+    st.markdown("##### マクロ要因")
+    st.caption("市場調整後リターン（Residual）と、事前定義した要因の同時点の関係です。")
     for row in detail["primary_drivers"]:
         with st.container(border=True):
             st.markdown(f"**{row['driver']}**")
@@ -388,22 +402,23 @@ def _render_stock_drivers(detail: dict[str, object]) -> None:
             else:
                 st.caption(f"Proxy: {row['proxy']}")
             if row.get("status") != "Available":
-                st.write(f"Unavailable｜{row.get('reason', 'データ不足')}")
+                st.write(f"利用不可｜{row.get('reason', 'データ不足')}")
                 continue
-            st.metric("120D Residual correlation", _correlation(row.get("correlation_120d")))
+            st.metric("120日 Residual相関", _correlation(row.get("correlation_120d")))
             st.write(f"60D {_correlation(row.get('correlation_60d'))}　/　20D {_correlation(row.get('correlation_20d'))}")
-            st.caption(f"Stability: {row.get('stability')}｜{row.get('reason')}")
+            st.caption(f"安定性: {_ui_state(row.get('stability'))}｜{row.get('reason')}")
     explanation = detail["explainability"]
-    st.markdown("##### Macro Explainability")
-    st.markdown(f"### {explanation.get('classification', 'Unavailable')}")
+    st.markdown("##### マクロ説明力")
+    st.markdown(f"### {_ui_state(explanation.get('classification', 'Unavailable'))}")
     st.caption(str(explanation.get("reason", "")))
 
 
 def _render_stock_anchors(detail: dict[str, object]) -> None:
-    st.markdown("##### Core20 Anchors / Relative Behavior")
+    st.markdown("##### Core20 Anchorとの比較")
+    st.caption("共通テーマ・共通マクロ要因・セクターをもつ参照銘柄と比較します。")
     anchors = detail["anchors"]
     if not anchors:
-        st.info("Strong Anchor not available：比較する意味が十分に強いCore20参照銘柄がありません。")
+        st.info("比較可能なAnchorなし：比較根拠が十分に強いCore20参照銘柄がありません。")
         return
     for anchor in anchors:
         with st.container(border=True):
@@ -437,11 +452,11 @@ def _render_stock_specific_move(detail: dict[str, object]) -> None:
     metrics[0].metric("市場調整後 5日", _percent(residual.get("residual_5d")))
     metrics[1].metric("市場調整後 1か月", _percent(residual.get("residual_1m")))
     metrics[2].metric("市場調整後 3か月", _percent(residual.get("residual_3m")))
-    st.caption("日次Residual Returnを複利累積した近似値です。Alphaや企業固有要因を断定するものではありません。")
+    st.caption("市場・マクロ等では説明しきれない値動きの大きさを確認します。企業固有要因を断定するものではありません。")
     movement = detail["movement"]
     st.markdown(f"### 判定: {movement['classification']}")
     st.caption(movement["reason"])
-    st.markdown("##### 次に確認すること")
+    st.markdown("##### 解釈・次に確認すること")
     st.caption(detail["next_analysis"])
 
 
@@ -489,6 +504,57 @@ def _correlation(value: object) -> str:
 
 def _number(value: object) -> str:
     return "—" if value is None or pd.isna(value) else f"{float(value):.2f}"
+
+
+def _render_actual_chart(series: pd.DataFrame, metric: str) -> None:
+    formatter = format_eps if metric == "eps" else format_jpy
+    figure = go.Figure(go.Scatter(
+        x=series["期"], y=series["value"], name="実績", mode="lines+markers",
+        line={"color": "#4da3ff"}, marker={"symbol": "circle", "size": 8},
+        customdata=[formatter(value) for value in series["value"]],
+        hovertemplate="%{x}<br>実績: %{customdata}<extra></extra>",
+    ))
+    figure.update_layout(**_chart_layout(series["value"], metric))
+    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+
+
+def _render_annual_forecast_chart(series: pd.DataFrame, metric: str) -> None:
+    formatter = format_eps if metric == "eps" else format_jpy
+    figure = go.Figure()
+    for column, name, dash, symbol, color in (
+        ("実績", "実績", "solid", "circle", "#4da3ff"),
+        ("会社予想", "会社予想", "dash", "circle-open", "#f0b429"),
+    ):
+        values = series[column]
+        figure.add_trace(go.Scatter(
+            x=series["期"], y=values, name=name, mode="lines+markers",
+            connectgaps=False, line={"dash": dash, "color": color},
+            marker={"symbol": symbol, "size": 9, "line": {"width": 2, "color": color}},
+            customdata=[formatter(value) if pd.notna(value) else "—" for value in values],
+            hovertemplate=f"%{{x}}<br>{name}: %{{customdata}}<extra></extra>",
+        ))
+    figure.update_layout(**_chart_layout(pd.concat([series["実績"], series["会社予想"]]), metric))
+    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+
+
+def _chart_layout(values: pd.Series, metric: str) -> dict[str, object]:
+    ticks = chart_axis_ticks(values, metric)
+    return {
+        "height": 280, "margin": {"l": 22, "r": 12, "t": 18, "b": 38},
+        "legend": {"orientation": "h", "y": -0.22},
+        "yaxis": {"tickvals": ticks["tickvals"], "ticktext": ticks["ticktext"], "automargin": True},
+        "xaxis": {"title": None, "tickangle": -30},
+        "hovermode": "x unified",
+    }
+
+
+def _ui_state(value: object) -> str:
+    labels = {
+        "Strong": "強い", "Improving": "改善", "Mixed": "まちまち", "Weakening": "弱含み",
+        "Unavailable": "利用不可", "Available": "利用可", "High": "高い", "Medium": "中程度",
+        "Low": "低い", "Macro-unexplained": "マクロで説明しにくい", "Stable": "安定", "Unstable": "不安定",
+    }
+    return labels.get(str(value), str(value))
 
 
 def _missing(value: object) -> bool:

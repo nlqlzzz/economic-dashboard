@@ -1829,6 +1829,7 @@ with theme_tab:
                 korea_exports,
                 japan_snapshot_assessment,
             )
+            st.divider()
             global_pulse = build_current_global_pulse(
                 taiwan_orders,
                 korea_exports,
@@ -1836,10 +1837,12 @@ with theme_tab:
                 machinery_summary,
             )
             render_global_semiconductor_pulse(global_pulse)
+            st.divider()
             render_price_vs_fundamentals(
                 theme_series.get("SOX指数"),
                 global_pulse,
             )
+            st.divider()
             render_semiconductor_market_compact(theme_series, INDICATORS)
             render_global_demand(
                 taiwan_orders,
@@ -1848,7 +1851,8 @@ with theme_tab:
                 korea_error_text,
             )
 
-            st.markdown("#### Japan Cycle")
+            st.divider()
+            st.markdown("#### 日本の半導体サイクル")
             st.caption(
                 "経済産業省の電子部品・デバイス工業から、生産・出荷・在庫・在庫率を"
                 "組み合わせて日本の半導体実体サイクルを確認します。"
