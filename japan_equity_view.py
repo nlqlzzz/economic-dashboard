@@ -524,7 +524,8 @@ def _render_actual_chart(series: pd.DataFrame, metric: str) -> None:
 
 
 def _render_annual_forecast_chart(series: pd.DataFrame, metric: str) -> None:
-    formatter = lambda value: format_financial_value(value, metric, None)
+    unit = series["unit"].dropna().iloc[0] if "unit" in series and series["unit"].notna().any() else None
+    formatter = lambda value: format_financial_value(value, metric, unit)
     figure = go.Figure()
     for column, name, dash, symbol, color in (
         ("実績", "実績", "solid", "circle", "#4da3ff"),
@@ -538,7 +539,7 @@ def _render_annual_forecast_chart(series: pd.DataFrame, metric: str) -> None:
             customdata=[formatter(value) if pd.notna(value) else "—" for value in values],
             hovertemplate=f"%{{x}}<br>{name}: %{{customdata}}<extra></extra>",
         ))
-    figure.update_layout(**_chart_layout(pd.concat([series["実績"], series["会社予想"]]), metric, None))
+    figure.update_layout(**_chart_layout(pd.concat([series["実績"], series["会社予想"]]), metric, unit))
     st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
 
 

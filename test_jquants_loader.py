@@ -50,6 +50,7 @@ class JQuantsNormalizationTest(unittest.TestCase):
         self.assertTrue(row["is_cumulative"])
         self.assertFalse(row["is_derived"])
         self.assertEqual(row["accounting_standard"], "Japan GAAP")
+        self.assertEqual(row["unit"], "JPY")
 
     def test_forecast_targets_its_fiscal_year_not_current_quarter(self) -> None:
         row = self.normalized[self.normalized.metric.eq("forecast_revenue")].iloc[0]
