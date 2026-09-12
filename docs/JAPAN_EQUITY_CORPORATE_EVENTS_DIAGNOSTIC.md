@@ -4,6 +4,30 @@
 対象: Japan Core 20  
 結論: **No-Go（追加の有料契約なしでは実装しない）**
 
+## Corporate Events Lite（2026-09-12追記）
+
+結論: **No-Go（現行実行環境で `JQUANTS_API_KEY` を確認できず、Core20実データ診断を実施できない）**。
+
+TDnet本格版のNo-Go判断は維持する。一方、公式 `jquants-api-client` のV2 `ClientV2` には以下の決算関連メソッドが存在する。
+
+- `get_fin_summary`: Financial Summary。実績の `DiscDate`、対象期、通期会社予想を取得する候補。
+- `get_fin_earnings_date`: 銘柄・日付・予定日で決算発表日を取得する候補。
+- `get_eq_earnings_cal`: 決算発表予定カレンダーを取得する候補。
+- `get_fin_dividend`: 配当情報の候補。ただし今回未検証のためLiteには含めない。
+
+既存のFinancial Summary正規化では、`DiscDate`、Fiscal Year / Quarter、実績とForecastを安全に分離できる。実データで同一企業・同一Fiscal Year・同一metric・同一通貨／単位の複数Forecast開示が確認できた場合だけ、`forecast_update` として前回値・最新値を並べられる。値の増減はmetric単位の `Upward / Downward / Unchanged` とし、正式な「業績予想修正」とは呼ばない。
+
+ただし、この実行環境ではキー未設定のため、Summary履歴、Forecast更新、決算予定日をCore20 20社で取得してcoverageを測定できなかった。キーなしでEndpointを繰り返し呼ぶこと、公開TDnetの代替取得、推測によるイベント表示は行わない。
+
+### 契約・キーが利用可能な環境でのGo条件
+
+1. `get_fin_summary` でCore20の決算発表・Forecast履歴を実測し、部分失敗を分離する。
+2. `get_fin_earnings_date` または `get_eq_earnings_cal` の20社coverage、予定日範囲、rate limitを実測する。
+3. 決算発表・Forecast Update・次回決算予定を共通schemaへ正規化し、直近3〜5件だけをStock Detailへ表示する。
+4. UIには「J-Quantsで取得可能な決算関連イベントのみ。M&A・自己株式取得・大型受注等は含まれない」と明記する。
+
+この条件を満たした場合のLite schemaは、既存schemaの `event_type` を `earnings_release` / `forecast_update` / `earnings_schedule` に限定し、`event_id` はticker・type・開示日・対象期から安定生成する。`document_url`、TDnet item code、revision / deletionは `None` とする。
+
 ## 結論
 
 Corporate Events v1の第一候補は、JPX総研のJ-Quants APIに追加された「適時開示書類（TDnet）アドオン」である。日中配信、API / CSV、一律5年履歴を提供するが、Lightプラン以上に加えて月額11,000円（税込）のアドオンが必要である。
