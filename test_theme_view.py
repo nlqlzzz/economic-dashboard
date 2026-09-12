@@ -5,7 +5,9 @@ import pandas as pd
 from theme_view import (
     THEME_DEFINITIONS,
     build_theme_snapshot,
+    quality_check_theme_series,
     relative_strength,
+    relative_strength_with_quality,
     theme_relationship_pairs,
     upcoming_theme_events,
 )
@@ -77,6 +79,33 @@ class ThemeViewTest(unittest.TestCase):
         self.assertAlmostEqual(ratio.iloc[0], 100.0)
         self.assertGreater(ratio.iloc[-1], 100.0)
         self.assertGreater(one_month, 0)
+
+    def test_relative_strength_removes_temporary_break_and_realigns_dates(self):
+        index = pd.date_range("2026-03-20", periods=8, freq="B")
+        left = pd.Series([38000, 38100, 38200, 38300, 38400, 38500, 38600, 38700], index=index, dtype=float)
+        right = pd.Series([380, 382, 383, 38, 37, 385, 386, 388], index=index, dtype=float)
+        result = relative_strength_with_quality(left, right)
+        self.assertEqual(result["right_quality"].status, "cleaned")
+        self.assertNotIn(index[3], result["series"].index)
+        self.assertLess(result["series"].max(), 110)
+
+    def test_relative_strength_blocks_persistent_extreme_move_on_either_side(self):
+        index = pd.date_range("2026-03-20", periods=7, freq="B")
+        stable = pd.Series([100, 101, 102, 103, 104, 105, 106], index=index, dtype=float)
+        broken = pd.Series([100, 101, 102, 30, 31, 29, 32], index=index, dtype=float)
+        for left, right in ((broken, stable), (stable, broken)):
+            with self.subTest(side="left" if left is broken else "right"):
+                result = relative_strength_with_quality(left, right)
+                self.assertTrue(result["series"].empty)
+                self.assertIn("表示できません", result["reason"])
+
+    def test_theme_quality_cleaning_is_shared_by_snapshot_and_correlation_inputs(self):
+        index = pd.date_range("2026-03-20", periods=8, freq="B")
+        prices = {"left": pd.Series([100, 101, 102, 103, 104, 105, 106, 107], index=index),
+                  "right": pd.Series([100, 101, 102, 10, 9, 103, 104, 105], index=index)}
+        cleaned, results = quality_check_theme_series(prices, {"left": {"category": "マーケット"}, "right": {"category": "マーケット"}})
+        self.assertEqual(results["right"].status, "cleaned")
+        self.assertNotIn(index[3], cleaned["right"].index)
 
     def test_filters_upcoming_events_by_theme(self):
         events = pd.DataFrame(

@@ -70,7 +70,9 @@ from market_summary import build_market_summary
 from theme_view import (
     THEME_DEFINITIONS,
     build_theme_snapshot,
+    quality_check_theme_series,
     relative_strength,
+    relative_strength_with_quality,
     theme_relationship_pairs,
     upcoming_theme_events,
 )
@@ -1707,6 +1709,14 @@ with theme_tab:
                     theme_errors.append(f"{theme_indicator_name}: {theme_error}")
         for theme_error in theme_errors:
             st.warning(f"テーマ別ビューでは {theme_error}")
+        theme_series, theme_price_quality = quality_check_theme_series(
+            theme_series, INDICATORS
+        )
+        for name, quality in theme_price_quality.items():
+            if quality.status == "cleaned":
+                st.caption(f"{name}: {quality.reason}")
+            elif quality.status == "blocked":
+                st.warning(f"{name}: {quality.reason}")
 
         if selected_theme_name == "日本株":
             core_start = (
@@ -2343,9 +2353,11 @@ with theme_tab:
             else:
                 relative_left, relative_right = relative_pairs[0]
             if relative_left in theme_series and relative_right in theme_series:
-                relative_values, relative_month_change = relative_strength(
+                relative_result = relative_strength_with_quality(
                     theme_series[relative_left], theme_series[relative_right]
                 )
+                relative_values = relative_result["series"]
+                relative_month_change = relative_result["one_month"]
                 if not relative_values.empty:
                     relative_values = relative_values.loc[
                         relative_values.index
@@ -2388,6 +2400,16 @@ with theme_tab:
                             else f"（相対強度 {relative_month_change:+.2f}%）"
                         )
                     )
+                else:
+                    st.info(str(relative_result["reason"]))
+            else:
+                blocked = [
+                    name for name in (relative_left, relative_right)
+                    if theme_price_quality.get(name) is not None
+                    and theme_price_quality[name].status == "blocked"
+                ]
+                if blocked:
+                    st.info("価格系列に確認できない極端変動があるため、相対強度分析を表示できません。")
 
             correlation_pairs = theme_relationship_pairs(selected_theme, "correlation")
             if len(correlation_pairs) > 1:
