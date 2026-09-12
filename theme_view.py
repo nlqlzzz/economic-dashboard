@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from price_quality import PriceQualityResult, inspect_price_series
 from utils import change_from_previous, latest_value, percent_change_since
 
 
@@ -133,14 +134,50 @@ def relative_strength(
     left: pd.Series, right: pd.Series
 ) -> tuple[pd.Series, float | None]:
     """2資産の相対強度を開始日=100で返し、直近1か月の変化も計算する。"""
-    pair = pd.concat({"left": left, "right": right}, axis=1).dropna()
+    result = relative_strength_with_quality(left, right)
+    return result["series"], result["one_month"]
+
+
+def relative_strength_with_quality(left: pd.Series, right: pd.Series) -> dict[str, object]:
+    """Calculate only from quality-checked, date-aligned price observations."""
+    left_quality = inspect_price_series(left)
+    right_quality = inspect_price_series(right)
+    if not left_quality.usable or not right_quality.usable:
+        return {
+            "series": pd.Series(dtype=float), "one_month": None,
+            "left_quality": left_quality, "right_quality": right_quality,
+            "reason": "価格系列に確認できない極端変動があるため、相対強度分析を表示できません。",
+        }
+    # concat/dropna is deliberately after the exclusions: neither side may retain
+    # a price for a removed observation date.
+    pair = pd.concat({"left": left_quality.series, "right": right_quality.series}, axis=1).dropna()
     if pair.empty or pair.iloc[0].eq(0).any():
-        return pd.Series(dtype=float), None
+        return {"series": pd.Series(dtype=float), "one_month": None,
+                "left_quality": left_quality, "right_quality": right_quality,
+                "reason": "共通する有効な価格観測が不足しています。"}
     ratio = (pair["left"] / pair["left"].iloc[0]) / (
         pair["right"] / pair["right"].iloc[0]
     ) * 100
     one_month = percent_change_since(ratio, ratio.index[-1] - pd.DateOffset(months=1))
-    return ratio, one_month
+    return {"series": ratio, "one_month": one_month,
+            "left_quality": left_quality, "right_quality": right_quality, "reason": ""}
+
+
+def quality_check_theme_series(
+    series_by_name: dict[str, pd.Series], indicator_metadata: dict[str, dict[str, object]],
+) -> tuple[dict[str, pd.Series], dict[str, PriceQualityResult]]:
+    """Clean temporary price scale breaks once for all theme price calculations."""
+    usable: dict[str, pd.Series] = {}
+    results: dict[str, PriceQualityResult] = {}
+    for name, series in series_by_name.items():
+        if indicator_metadata[name].get("category") == "金利":
+            usable[name] = series
+            continue
+        result = inspect_price_series(series)
+        results[name] = result
+        if result.usable:
+            usable[name] = result.series
+    return usable, results
 
 
 def upcoming_theme_events(
