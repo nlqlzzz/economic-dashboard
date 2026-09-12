@@ -23,7 +23,8 @@ SOURCE_NAME = "J-Quants API V2 Financial Summary"
 SOURCE_URL = "https://jpx-jquants.com/"
 REQUIRED_COLUMNS = (
     "ticker", "code", "jquants_code", "company_name", "disclosure_date",
-    "reference_period", "fiscal_year", "fiscal_quarter", "document_type",
+    "period_start", "reference_period", "fiscal_year_start", "fiscal_year_end",
+    "fiscal_year", "fiscal_quarter", "document_type",
     "accounting_standard", "consolidated_flag", "metric", "value", "unit",
     "currency", "is_cumulative", "is_derived", "source_name", "source_url", "fetched_at",
 )
@@ -163,7 +164,9 @@ def normalize_financial_summaries(
         base = {
             "ticker": ticker_by_code.get(code), "code": code or None, "jquants_code": source_code or None,
             "company_name": company_by_code.get(code), "disclosure_date": _date_or_none(record.get("DiscDate")),
-            "reference_period": reference_period, "fiscal_year": fiscal_end[:4] if fiscal_end else None,
+            "period_start": cur_start, "reference_period": reference_period,
+            "fiscal_year_start": fiscal_start, "fiscal_year_end": fiscal_end,
+            "fiscal_year": fiscal_end[:4] if fiscal_end else None,
             "fiscal_quarter": period_type, "document_type": document_type,
             "accounting_standard": _accounting_standard(document_type),
             "consolidated_flag": _consolidated_flag(document_type), "unit": None, "currency": "JPY",
@@ -189,13 +192,26 @@ def normalize_financial_summaries(
 
 
 def derive_standalone_quarters(records: pd.DataFrame) -> pd.DataFrame:
-    """Derive Q2/Q3/Q4 only when cumulative-period evidence is explicit and comparable."""
+    """Derive standalone revenue/profit quarters only from compatible cumulative data.
+
+    EPS is deliberately excluded.  Its denominator (weighted-average shares) can
+    differ by period, so subtracting cumulative EPS does not produce a reliable
+    standalone-quarter EPS.
+    """
     if records.empty:
         return records.copy()
+    required_evidence = {"period_start", "fiscal_year_start", "fiscal_year_end", "unit", "currency"}
+    if not required_evidence.issubset(records.columns):
+        # Direct callers without normalized period evidence may still use reported
+        # EPS, but must not get a silently derived standalone quarter.
+        return records[records.get("metric", pd.Series(dtype=str)).eq("eps")].copy()
     output: list[dict[str, object]] = []
-    key_columns = ["ticker", "code", "metric", "fiscal_year", "accounting_standard", "consolidated_flag"]
+    key_columns = [
+        "ticker", "code", "metric", "fiscal_year_start", "fiscal_year_end",
+        "accounting_standard", "consolidated_flag", "unit", "currency",
+    ]
     raw = records.copy()
-    raw = raw[raw["metric"].isin(("revenue", "operating_profit", "net_income", "eps"))]
+    raw = raw[raw["metric"].isin(("revenue", "operating_profit", "net_income"))]
     raw = raw[raw["document_type"].fillna("").str.contains("FinancialStatements", case=False)]
     for _, group in raw.groupby(key_columns, dropna=False):
         latest = (group.sort_values("disclosure_date", na_position="first")
@@ -209,7 +225,10 @@ def derive_standalone_quarters(records: pd.DataFrame) -> pd.DataFrame:
                 continue
             if label in {"Q3", "Q4"} and previous.get("is_cumulative") is not True:
                 continue
-            if current.get("value") is None or current.get("unit") != previous.get("unit") or current.get("currency") != previous.get("currency"):
+            if (current.get("value") is None or current.get("unit") != previous.get("unit")
+                    or current.get("currency") != previous.get("currency")
+                    or current.get("period_start") != current.get("fiscal_year_start")
+                    or previous.get("period_start") != previous.get("fiscal_year_start")):
                 continue
             derived = current.to_dict()
             derived["fiscal_quarter"] = label
@@ -217,25 +236,65 @@ def derive_standalone_quarters(records: pd.DataFrame) -> pd.DataFrame:
             derived["is_cumulative"] = False
             derived["is_derived"] = True
             output.append(derived)
+    # Keep reported EPS as cumulative/FY disclosure values, without deriving it.
+    eps = raw.iloc[0:0]  # keeps column ordering even for old fixtures
+    source_eps = records[records["metric"].eq("eps")]
+    if not source_eps.empty:
+        eps = source_eps[source_eps["document_type"].fillna("").str.contains("FinancialStatements", case=False)]
+    output.extend(eps.to_dict("records"))
     return pd.DataFrame(output, columns=records.columns)
 
 
 def add_fiscal_yoy(records: pd.DataFrame) -> pd.DataFrame:
-    """Add YoY only between matching fiscal quarters and compatible definitions."""
+    """Add a safe YoY ratio plus a semantic comparison classification.
+
+    Ratios are only meaningful when both values are positive.  Profit and EPS
+    crossings are classified explicitly instead of rendering misleading -200%.
+    """
     output = records.copy()
+    for column in ("unit", "currency"):
+        if column not in output:
+            output[column] = pd.NA
     output["yoy"] = pd.NA
+    output["comparison"] = "unavailable"
+    output["value_change"] = pd.NA
     if output.empty:
         return output
-    keys = ["ticker", "code", "metric", "fiscal_quarter", "accounting_standard", "consolidated_flag", "is_derived"]
+    keys = [
+        "ticker", "code", "metric", "fiscal_quarter", "accounting_standard",
+        "consolidated_flag", "is_derived", "unit", "currency",
+    ]
     for _, group in output.groupby(keys, dropna=False):
         ordered = group.sort_values("fiscal_year")
         previous: pd.Series | None = None
         for index, row in ordered.iterrows():
             if previous is not None and row.get("fiscal_year") and previous.get("fiscal_year"):
-                if int(str(row["fiscal_year"])) == int(str(previous["fiscal_year"])) + 1 and float(previous["value"]) != 0:
-                    output.loc[index, "yoy"] = (float(row["value"]) / float(previous["value"]) - 1.0) * 100.0
+                consecutive = int(str(row["fiscal_year"])) == int(str(previous["fiscal_year"])) + 1
+                if consecutive and pd.notna(row.get("value")) and pd.notna(previous.get("value")):
+                    current_value, previous_value = float(row["value"]), float(previous["value"])
+                    output.loc[index, "value_change"] = current_value - previous_value
+                    comparison = _comparison_kind(str(row.get("metric")), previous_value, current_value)
+                    output.loc[index, "comparison"] = comparison
+                    if previous_value > 0 and current_value > 0:
+                        output.loc[index, "yoy"] = (current_value / previous_value - 1.0) * 100.0
             previous = row
     return output
+
+
+def _comparison_kind(metric: str, previous: float, current: float) -> str:
+    """Classify a comparable change without turning profit crossings into ratios."""
+    if current == previous:
+        return "flat"
+    if metric in {"net_income", "operating_profit", "eps"}:
+        if previous < 0 < current:
+            return "profit_turnaround"
+        if previous > 0 > current:
+            return "loss_turnaround"
+        if previous < 0 and current < 0:
+            return "loss_narrowing" if current > previous else "loss_widening"
+    if previous == 0:
+        return "from_zero_increase" if current > 0 else "from_zero_decrease"
+    return "increase" if current > previous else "decrease"
 
 
 def assess_coverage(records: pd.DataFrame, expected_tickers: Iterable[str]) -> pd.DataFrame:
