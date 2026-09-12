@@ -103,10 +103,10 @@ def format_eps(value: object) -> str:
 
 def format_financial_value(value: object, metric: str, unit: object = None) -> str:
     if metric == "eps": return format_eps(value)
-    # Financial Summary currently has no row-level amount-unit field.  Do not
-    # label unknown raw values as yen until source-unit confirmation is retained.
-    if unit is not None and not pd.isna(unit) and str(unit) in {"JPY", "yen"}: return format_jpy(value)
-    return "—" if value is None or pd.isna(value) else _trim(float(value)) + "（単位未確認）"
+    # Financial Summary monetary values are yen-denominated.  ``None`` remains
+    # backward-compatible with previously cached normalized records.
+    if unit is None or pd.isna(unit) or str(unit) in {"JPY", "yen"}: return format_jpy(value)
+    return "—" if value is None or pd.isna(value) else _trim(float(value)) + f" {unit}"
 
 
 def comparison_label(comparison: object, yoy: object = None, value_change: object = None, metric: str = "") -> str:
@@ -141,12 +141,14 @@ def build_annual_forecast_series(summary: dict[str, object], metric: str) -> pd.
     actual = actual[actual.get("metric", pd.Series(dtype=str)).eq(metric)].copy()
     forecast = forecast[forecast.get("metric", pd.Series(dtype=str)).eq(f"forecast_{metric}")].copy()
     rows = []
-    for _, row in actual.sort_values("disclosure_date").drop_duplicates("fiscal_year", keep="last").iterrows(): rows.append({"期": str(row.get("fiscal_year")), "実績": row.get("value"), "会社予想": None})
+    for _, row in actual.sort_values("disclosure_date").drop_duplicates("fiscal_year", keep="last").iterrows(): rows.append({"期": str(row.get("fiscal_year")), "実績": row.get("value"), "会社予想": None, "unit": row.get("unit")})
     for _, row in forecast.iterrows():
         year = str(row.get("fiscal_year")); found = next((item for item in rows if item["期"] == year), None)
-        if found is None: rows.append({"期": year, "実績": None, "会社予想": row.get("value")})
-        else: found["会社予想"] = row.get("value")
-    return pd.DataFrame(rows).sort_values("期").reset_index(drop=True) if rows else pd.DataFrame(columns=["期", "実績", "会社予想"])
+        if found is None: rows.append({"期": year, "実績": None, "会社予想": row.get("value"), "unit": row.get("unit")})
+        else:
+            found["会社予想"] = row.get("value")
+            found["unit"] = found["unit"] if found.get("unit") is not None else row.get("unit")
+    return pd.DataFrame(rows).sort_values("期").reset_index(drop=True) if rows else pd.DataFrame(columns=["期", "実績", "会社予想", "unit"])
 
 
 def chart_axis_ticks(values: pd.Series, metric: str, unit: object = "JPY") -> dict[str, list[object]]:
