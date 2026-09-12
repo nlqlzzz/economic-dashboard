@@ -22,8 +22,34 @@ class CorrelationChangeTest(unittest.TestCase):
 
         self.assertAlmostEqual(frame.loc[index[1], "株価"], 1.0)
         self.assertAlmostEqual(frame.loc[index[1], "金利"], 0.1)
-        self.assertEqual(labels["株価"], "日次騰落率（%）")
-        self.assertEqual(labels["金利"], "日次変化幅（pt）")
+        self.assertEqual(labels["株価"], "観測間騰落率（%）")
+        self.assertEqual(labels["金利"], "観測間変化幅（pt）")
+
+    def test_mismatched_return_origins_are_not_compared(self):
+        index = pd.to_datetime(["2026-01-05", "2026-01-06", "2026-01-07"])
+        frame, _ = build_daily_change_frame(
+            {
+                "銘柄": pd.Series([100.0, None, 121.0], index=index),
+                "市場": pd.Series([100.0, 110.0, 121.0], index=index),
+            },
+            {"銘柄": "return", "市場": "return"},
+        )
+        self.assertTrue(pd.isna(frame.loc[index[-1], "銘柄"]))
+        self.assertTrue(pd.isna(frame.loc[index[-1], "市場"]))
+        starts = frame.attrs["period_metadata"].starts
+        self.assertEqual(starts.loc[index[-1], "銘柄"], index[0])
+        self.assertEqual(starts.loc[index[-1], "市場"], index[1])
+
+    def test_yield_changes_also_require_the_same_start_date(self):
+        index = pd.to_datetime(["2026-01-05", "2026-01-06", "2026-01-07"])
+        frame, _ = build_daily_change_frame(
+            {
+                "株価": pd.Series([100.0, None, 101.0], index=index),
+                "金利": pd.Series([1.0, 1.1, 1.2], index=index),
+            },
+            {"株価": "return", "金利": "change"},
+        )
+        self.assertTrue(frame.loc[index[-1]].isna().all())
 
     def test_compares_current_correlation_with_prior_periods(self):
         index = pd.date_range("2020-01-01", periods=180, freq="B")
