@@ -13,6 +13,7 @@ from japan_equity import (
     estimate_market_model,
     expected_proxy_names,
     residual_returns,
+    macro_information_timing,
     top_observed_correlations,
     top_macro_sensitivities,
 )
@@ -48,8 +49,11 @@ class JapanMarketMapTest(unittest.TestCase):
         self.assertAlmostEqual(toyota["return_5d"], (199 / 194 - 1) * 100)
         self.assertIsNotNone(toyota["return_1m"])
         self.assertIsNotNone(toyota["return_3m"])
-        self.assertAlmostEqual(toyota["relative_1m"], toyota["return_1m"] - _return_since(topix, 1))
-        self.assertAlmostEqual(toyota["relative_3m"], toyota["return_3m"] - _return_since(topix, 3))
+        for months in (1, 3):
+            start, end = toyota[f"relative_{months}m_start"], toyota[f"relative_{months}m_end"]
+            expected = ((prices.loc[end, "7203.T"] / prices.loc[start, "7203.T"] - 1)
+                        - (topix.loc[end] / topix.loc[start] - 1)) * 100
+            self.assertAlmostEqual(toyota[f"relative_{months}m"], expected)
 
     def test_missing_stock_is_unavailable_without_hiding_other_stocks(self) -> None:
         index = pd.date_range("2025-01-01", periods=80, freq="B")
@@ -68,6 +72,15 @@ class JapanMarketMapTest(unittest.TestCase):
         self.assertEqual(len(result), 20)
         self.assertTrue(result["status"].eq("Unavailable").all())
         self.assertTrue(result["current"].isna().all())
+
+    def test_stale_and_short_history_are_distinct_from_missing_and_quality_blocked(self) -> None:
+        index = pd.date_range("2025-01-01", periods=100, freq="B")
+        stale = pd.Series(range(100, 180), index=index[:80], dtype=float)
+        short = pd.Series(range(100, 120), index=index[-20:], dtype=float)
+        frame = pd.DataFrame({"7203.T": stale, "8306.T": short})
+        result = build_market_map(frame, pd.Series(range(200, 300), index=index, dtype=float)).set_index("ticker")
+        self.assertEqual(result.loc["7203.T", "status"], "Stale")
+        self.assertEqual(result.loc["8306.T", "status"], "History Limited")
 
     def test_sector_aggregation_excludes_missing_stocks_and_handles_single_stock(self) -> None:
         market_map = pd.DataFrame(
@@ -155,7 +168,24 @@ class MarketAdjustedSensitivityTest(unittest.TestCase):
         prices = pd.DataFrame({"7203.T": range(100, 200)}, index=index, dtype=float)
         topix = pd.Series(range(100, 180), index=index[:80], dtype=float)
         row = build_market_map(prices, topix).query("ticker == '7203.T'").iloc[0]
-        self.assertAlmostEqual(row["relative_1m"], row["return_1m"] - _return_since(topix, 1))
+        start, end = row["relative_1m_start"], row["relative_1m_end"]
+        self.assertEqual(end, topix.index[-1])
+        stock_return = prices.loc[end, "7203.T"] / prices.loc[start, "7203.T"] - 1
+        market_return = topix.loc[end] / topix.loc[start] - 1
+        self.assertAlmostEqual(row["relative_1m"], (stock_return - market_return) * 100)
+
+    def test_missing_dates_never_compare_different_return_intervals(self) -> None:
+        index = pd.date_range("2025-01-01", periods=100, freq="B")
+        stock = pd.Series(range(100, 200), index=index, dtype=float).drop(index[-22])
+        market = pd.Series(range(200, 300), index=index, dtype=float).drop(index[-20])
+        row = build_market_map(pd.DataFrame({"7203.T": stock}), market).query("ticker == '7203.T'").iloc[0]
+        start, end = row["relative_1m_start"], row["relative_1m_end"]
+        self.assertIn(start, stock.index.intersection(market.index))
+        self.assertIn(end, stock.index.intersection(market.index))
+
+    def test_us_close_is_explicitly_ex_post_for_japan_decision_time(self) -> None:
+        self.assertEqual(macro_information_timing("NASDAQ総合指数"), "same_date_ex_post_not_japan_decision_time")
+        self.assertEqual(macro_information_timing("USD/JPY"), "same_date_observation")
 
     def test_stability_requires_strength_not_only_matching_sign(self) -> None:
         label, _ = classify_driver_stability(

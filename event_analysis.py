@@ -61,7 +61,10 @@ def analyze_event_reactions(
     horizons: tuple[int, ...] = (0, 1, 5, 20),
     low_sample_threshold: int = 12,
 ) -> pd.DataFrame:
-    """イベント直前の終値から各営業日後までの変化を資産別に集計する。"""
+    """イベント直前の終値から各営業日後までの事後的な価格反応を集計する。
+
+    公表後に情報を得て実行できた売買成績ではない。
+    """
     dates = pd.DatetimeIndex(pd.to_datetime(event_dates)).normalize()
     rows: list[dict[str, object]] = []
     for asset_name, series in asset_series.items():

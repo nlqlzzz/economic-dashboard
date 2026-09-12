@@ -15,6 +15,7 @@ from semiconductor_validation import (
     add_global_condition_signals,
     analyze_release_aware_correlation,
     analyze_release_aware_returns,
+    asof_improving,
     build_overseas_validation_signals,
     calculate_market_momentum,
     classify_price_vs_fundamentals,
@@ -202,12 +203,12 @@ def render_overseas_historical_validation(
     strict = build_overseas_validation_signals(overseas_data, strict=True)
     provisional = build_overseas_validation_signals(overseas_data, strict=False)
     if not strict.empty and asset_prices:
-        st.markdown("###### 厳密検証（実際のrelease_dateのみ）")
+        st.markdown("###### 公表日確認済み検証（公表時刻・改定履歴は未検証）")
         _render_validation_controls(strict, asset_prices, "strict")
     else:
-        st.info("厳密検証に利用できる公表日付き月次履歴が不足しています。速報は長期検証へ使用しません。")
+        st.info("公表日確認済み検証に利用できる月次履歴が不足しています。速報は長期検証へ使用しません。")
     with st.expander("暫定検証を見る（推定利用可能日・改定後データ）"):
-        st.warning("暫定検証：公表日不明の観測には対象月の2か月後月初を利用可能日として付与しています。公式公表日ではなく、厳密検証と混在させていません。")
+        st.warning("暫定検証：公表日不明の観測には対象月の2か月後月初を推定利用可能日として付与しています。公表日確認済みの結果とは分けて表示します。")
         if provisional.empty or not asset_prices:
             st.caption("暫定検証に利用できる履歴がありません。")
         else:
@@ -221,7 +222,8 @@ def _render_validation_controls(
 ) -> None:
     st.caption(
         f"利用可能日: {signals.index.min():%Y-%m-%d}〜{signals.index.max():%Y-%m-%d}｜"
-        f"利用可能日数: {len(signals)}"
+        f"公表イベント日数: {len(signals)}。異なる国の更新日は別イベントとして保持し、持続条件は成立開始時に1回だけ数えます。"
+        "最終公表から62日超の地域値は複合条件を判定不能にします。"
     )
     signal_name = st.selectbox("経済指標", list(signals), key=f"overseas_validation_signal_{key_suffix}")
     asset_name = st.selectbox("市場系列", list(asset_prices), key=f"overseas_validation_asset_{key_suffix}")
@@ -235,7 +237,7 @@ def _render_validation_controls(
     st.dataframe(correlation_display, hide_index=True, width="stretch")
     conditions = {
         f"{signal_name}: YoY > 0": signal > 0,
-        f"{signal_name}: YoYが前回より改善": signal > signal.shift(1),
+        f"{signal_name}: YoYが前回より改善": asof_improving(signal),
         f"{signal_name}: YoY > +20%": signal > 20,
     }
     enriched = add_global_condition_signals(signals)
@@ -252,9 +254,10 @@ def _render_validation_controls(
     display = result.copy()
     for column in ("平均", "中央値", "上昇確率", "25%点", "75%点", "最悪値", "最良値"):
         display[column] = display[column].map(lambda value: "—" if pd.isna(value) else f"{value:+.1f}%")
-    st.dataframe(display[["期間", "平均", "中央値", "上昇確率", "サンプル数", "注意"]], hide_index=True, width="stretch")
+    st.dataframe(display[["期間", "平均", "中央値", "上昇確率", "サンプル数", "除外", "価格品質", "注意"]], hide_index=True, width="stretch")
     with st.expander("分布の詳細を見る"):
-        st.dataframe(display[["期間", "25%点", "75%点", "最悪値", "最良値", "サンプル数"]], hide_index=True, width="stretch")
+        st.dataframe(display[["期間", "25%点", "75%点", "最悪値", "最良値", "サンプル数", "評価方法"]], hide_index=True, width="stretch")
+    st.caption("公表後評価は日付のみの公表情報を保守的に扱い、公表日の翌営業日以降の終値を起点にします。評価期間は暦月で、未満了・終点欠損を除外します。期間が重なる標本は独立ではなく、改定履歴・売買費用を含む運用成績ではありません。")
 
 
 def render_global_demand(

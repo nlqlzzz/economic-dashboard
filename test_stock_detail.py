@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from japan_equity import CORE_20, cumulative_residual_return
+from japan_equity import CORE_20, build_macro_sensitivity_analysis, build_market_map, cumulative_residual_return
 from japan_equity_view import _missing
 from price_quality import inspect_price_series
 from stock_detail import (
@@ -103,6 +103,25 @@ class StockDetailTest(unittest.TestCase):
         detail = build_stock_detail_analysis(
             CORE_20[0], broken, inspect_price_series(topix), macros, CORE_20, prices
         )
+        self.assertEqual(detail["market_exposure"]["status"], "Unavailable")
+
+    def test_same_bad_price_is_blocked_in_detail_map_and_shared_macro(self) -> None:
+        prices, topix, macros = _prices()
+        broken = prices["7203.T"].copy()
+        broken.iloc[-3:] *= 0.2
+        prices["7203.T"] = broken
+        topix_quality = inspect_price_series(topix)
+        market_map = build_market_map(prices, topix)
+        shared = build_macro_sensitivity_analysis(prices, macros, topix_quality, market_map)
+        detail = build_stock_detail_analysis(
+            CORE_20[0], broken, topix_quality, macros, CORE_20, prices,
+            shared_macro_analysis=shared,
+        )
+        map_row = market_map.query("ticker == '7203.T'").iloc[0]
+        exposure_row = shared["market_exposure"].query("ticker == '7203.T'").iloc[0]
+        self.assertEqual(map_row["status"], "Quality Blocked")
+        self.assertEqual(exposure_row["quality_status"], "blocked")
+        self.assertEqual(detail["quality"].status, "blocked")
         self.assertEqual(detail["market_exposure"]["status"], "Unavailable")
 
     def test_price_decline_and_earnings_improvement_are_not_called_aligned(self) -> None:

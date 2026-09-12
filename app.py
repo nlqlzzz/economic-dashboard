@@ -700,6 +700,7 @@ with event_tab:
     st.subheader("イベント前後分析")
     st.caption(
         "重要イベントの公表直前の終値を基準に、当日から20営業日後までの市場反応を集計します。"
+        "これは公表前後の事後的な価格反応であり、公表後に情報を得て実行できた売買成績ではありません。"
     )
     selected_event_name = st.selectbox(
         "分析するイベント", list(EVENT_HISTORY), key="event_analysis_name"
@@ -1743,8 +1744,7 @@ with theme_tab:
                         f"株価を取得できません: {missing_ticker}"
                     )
                 topix_quality = inspect_price_series(topix)
-                topix_for_analysis = topix_quality.series if topix_quality.usable else pd.Series(dtype=float)
-                core_market_map = build_market_map(core_prices, topix_for_analysis)
+                core_market_map = build_market_map(core_prices, topix)
 
                 core_macros: dict[str, pd.Series] = {}
                 for macro_name in MACRO_SERIES:
@@ -2284,8 +2284,10 @@ with theme_tab:
                         condition_display, hide_index=True, width="stretch"
                     )
                     st.caption(
-                        "基準値は利用可能日の直前終値、将来値は各月数経過後の最初の取引日です。"
+                        "公表日しか分からないため、起点は公表日の翌営業日以降で最初に取得できる終値です。"
+                        "終点は起点から指定暦月数が満了した後の最初の取引日で、未満了は除外します。"
                         "すべての結果にサンプル数を表示し、12件未満は「サンプル少」としています。"
+                        "評価期間が重なる標本は独立ではありません。売買費用を含む運用損益ではありません。"
                         "最新ファイルの改定後データを使う暫定検証であり、当時公表値の完全な"
                         "ポイント・イン・タイム検証ではありません。投資助言ではなく判断材料です。"
                     )

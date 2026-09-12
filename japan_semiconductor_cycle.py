@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from validation_timing import condition_onsets, evaluate_release_return, exclusion_summary
+
 
 IIP_DISPLAY_ORDER = ("在庫率", "出荷", "生産", "在庫")
 INVENTORY_CYCLE_PHASES = {
@@ -221,30 +223,23 @@ def build_semiconductor_backtest_signals(
 def analyze_release_aware_lead_lag(
     signal: pd.Series,
     asset_prices: pd.Series,
-    horizons: tuple[int, ...] = (0, 1, 2, 3, 6),
+    horizons: tuple[int, ...] = (1, 2, 3, 6),
     low_sample_threshold: int = 12,
+    *,
+    as_of: object | None = None,
 ) -> pd.DataFrame:
-    """利用可能日以降の月末価格だけで、指標と株価リターンの相関を比較する。"""
+    """公表後の満了済みリターンだけで、指標との事後相関を比較する。"""
     clean_signal = pd.to_numeric(signal, errors="coerce").dropna().sort_index()
-    prices = _clean_daily_prices(asset_prices)
     rows: list[dict[str, object]] = []
     for horizon in horizons:
         paired: list[tuple[float, float]] = []
+        statuses: list[str] = []
+        excluded_prices = 0
         for available_at, value in clean_signal.items():
-            base_values = prices.loc[prices.index < available_at]
-            if base_values.empty:
-                continue
-            target_month = pd.Timestamp(available_at) + pd.DateOffset(months=horizon)
-            target_values = prices.loc[
-                (prices.index >= available_at)
-                & (prices.index <= target_month.to_period("M").to_timestamp("M"))
-            ]
-            if target_values.empty:
-                continue
-            base = float(base_values.iloc[-1])
-            if base == 0:
-                continue
-            paired.append((float(value), (float(target_values.iloc[-1]) / base - 1) * 100))
+            observation = evaluate_release_return(asset_prices, available_at, horizon, mode="post_release", as_of=as_of)
+            statuses.append(observation.status)
+            excluded_prices = max(excluded_prices, observation.excluded_observations)
+            if observation.value is not None: paired.append((float(value), observation.value))
         sample = pd.DataFrame(paired, columns=["signal", "return"])
         count = len(sample)
         correlation = None if count < 2 else float(sample.corr().iloc[0, 1])
@@ -253,6 +248,9 @@ def analyze_release_aware_lead_lag(
                 "期間": BACKTEST_HORIZONS.get(horizon, f"{horizon}か月後"),
                 "相関": correlation,
                 "サンプル数": count,
+                "除外": exclusion_summary(statuses),
+                "価格品質": f"一時的不連続 {excluded_prices}観測除外" if excluded_prices else "確認済み",
+                "評価方法": "公表後評価（暦月）",
                 "注意": "サンプル少" if count < low_sample_threshold else "",
             }
         )
@@ -265,20 +263,21 @@ def analyze_semiconductor_condition_returns(
     asset_prices: pd.Series,
     horizons: tuple[int, ...] = (1, 3, 6),
     low_sample_threshold: int = 12,
+    *,
+    as_of: object | None = None,
 ) -> pd.DataFrame:
-    """公表後に条件が判明した過去局面の将来リターンを集計する。"""
+    """条件成立後の満了済みリターンを、成立局面ごとに一度だけ集計する。"""
     condition_dates = _condition_dates(signals, condition)
-    prices = _clean_daily_prices(asset_prices)
     rows: list[dict[str, object]] = []
     for horizon in horizons:
         returns: list[float] = []
+        statuses: list[str] = []
+        excluded_prices = 0
         for available_at in condition_dates:
-            before = prices.loc[prices.index < available_at]
-            target_date = available_at + pd.DateOffset(months=horizon)
-            after = prices.loc[prices.index >= target_date]
-            if before.empty or after.empty or before.iloc[-1] == 0:
-                continue
-            returns.append(float((after.iloc[0] / before.iloc[-1] - 1) * 100))
+            observation = evaluate_release_return(asset_prices, available_at, horizon, mode="post_release", as_of=as_of)
+            statuses.append(observation.status)
+            excluded_prices = max(excluded_prices, observation.excluded_observations)
+            if observation.value is not None: returns.append(observation.value)
         sample = pd.Series(returns, dtype=float)
         count = len(sample)
         rows.append(
@@ -288,6 +287,9 @@ def analyze_semiconductor_condition_returns(
                 "中央値": None if sample.empty else float(sample.median()),
                 "上昇確率": None if sample.empty else float((sample > 0).mean() * 100),
                 "サンプル数": count,
+                "除外": exclusion_summary(statuses),
+                "価格品質": f"一時的不連続 {excluded_prices}観測除外" if excluded_prices else "確認済み",
+                "評価方法": "公表後評価（暦月）",
                 "注意": "サンプル少" if count < low_sample_threshold else "",
             }
         )
@@ -311,8 +313,8 @@ def _condition_dates(signals: pd.DataFrame, condition: str) -> pd.DatetimeIndex:
     elif method == "negative_cross":
         selected = (series < 0) & (series.shift(1) >= 0)
     else:
-        selected = series >= 20
-    return pd.DatetimeIndex(signals.index[selected.fillna(False)])
+        selected = (series >= 20).astype("boolean")
+    return condition_onsets(selected)
 
 
 def _clean_daily_prices(series: pd.Series) -> pd.Series:

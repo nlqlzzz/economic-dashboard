@@ -165,6 +165,20 @@ class JapanSemiconductorCycleTest(unittest.TestCase):
         self.assertEqual(result.iloc[0]["注意"], "サンプル少")
         self.assertGreater(result.iloc[0]["平均"], 0)
 
+    def test_unmatured_six_month_observation_is_excluded(self) -> None:
+        signals = pd.DataFrame(
+            {"電デバ出荷前年比": [-1.0, 2.0]},
+            index=pd.to_datetime(["2026-01-15", "2026-03-15"]),
+        )
+        prices = pd.Series(
+            range(100, 220), index=pd.date_range("2026-01-01", periods=120, freq="B"), dtype=float
+        )
+        result = analyze_semiconductor_condition_returns(
+            signals, "出荷前年比プラス転換", prices, horizons=(6,), as_of="2026-06-30"
+        )
+        self.assertEqual(result.iloc[0]["サンプル数"], 0)
+        self.assertIn("未満了 1件", result.iloc[0]["除外"])
+
 
 if __name__ == "__main__":
     unittest.main()
