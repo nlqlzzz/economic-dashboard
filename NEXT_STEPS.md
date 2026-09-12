@@ -67,13 +67,18 @@
 
 目的: 日本の主要大型株について、市場全体に対する強弱、テーマ、実測マクロ感応度を一つの導線で確認する。
 
-現在地: Core 20のStock Detail、J-Quants Financial SummaryによるFundamentals / Earnings v1、モバイル向けFundamentals UI polishまで完了。次の日本株候補はNews / Corporate Eventsである。
+目的: 個人投資家向けの日本株分析を、**業績 → 評価水準 → 価格の反応 → リスク**の導線で段階的に整備する。Market Exposure、Macro Sensitivity、Residual、相関は補助情報として位置付ける。Streamlitを継続し、個人利用規模に不要なバックエンド移行は行わない。
 
-1. News / Corporate Events（次段階）
-   - Fundamentals / Earnings v1はJ-Quants API V2 Financial Summaryを利用して実装済み。Core20の実データ診断はConditional Goで、Revenue・Net Income・EPSを共通の主要指標、Operating Profitを取得可能かつ業種上適切な場合の補助指標として扱う。
-   - 次段階ではTDnetの適時開示、決算発表、業績予想修正、自社株買い、増資、M&A、大型受注、経営方針変更を、原因断定を避けてStock Detailの説明不足を確認する材料として検討する。
-   - TDnetで不足する詳細Fundamentalsが必要になった場合に限り、EDINET APIのXBRLを候補として調査する。Yahoo Finance由来の日本株四半期P/LはCore20で十分な履歴が得られず、Earnings Trend / Momentumへは使用しない。
-   - Historical Valuation、Analyst Consensus、任意銘柄へのFundamentals拡張は、News / Corporate Eventsの基盤を確認した後に段階的に検討する。売買判定や株価予測とは分離する。
+1. **A. 決算データと業績判定の正確性修正（今回・PR-A）**
+   - 赤字・ゼロを含む比較を比率だけで扱わず、黒字転換・赤字拡大等の比較区分へ正規化する。
+   - EPSは累計値の単純差分から単独四半期を導出しない。最新決算・会社予想は対象期、会計定義、開示日がそろう値だけを表示する。
+   - 価格と業績、Macro相関の解釈は、因果や整合性を断定せず、確認できた事実と不足情報を分ける。
+2. **B. 価格品質・時点整合・過去検証の統一（次PR）**
+   - 価格品質、利用可能日、改定、過去検証の定義を分析横断で統一する。
+3. **C. 日本株を主入口にした銘柄分析の画面統合（後続PR）**
+   - 業績、評価水準、価格反応、リスクを主導線にし、補助分析を必要時に確認できる画面へ統合する。
+
+Corporate Events Lite、TDnet Full、Event Study、General Newsは、A〜Cの主導線を安定化した後に別途優先順位を判断する。TDnetで不足する詳細Fundamentalsが必要な場合だけ、EDINET APIのXBRLを候補として調査する。
 2. Arbitrary Japanese Stock Analysis（将来）
    - 任意Ticker入力と、Core20 Anchorを参照した市場・Macro・相対行動の比較を追加する。
 

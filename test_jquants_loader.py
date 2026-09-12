@@ -80,7 +80,7 @@ class JQuantsNormalizationTest(unittest.TestCase):
         uncertain["is_cumulative"] = uncertain["is_cumulative"].astype(object)
         uncertain.loc[uncertain.fiscal_quarter.eq("Q2"), "is_cumulative"] = None
         derived = derive_standalone_quarters(uncertain)
-        self.assertNotIn("Q2", set(derived.fiscal_quarter))
+        self.assertNotIn("Q2", set(derived[derived.metric.eq("revenue")].fiscal_quarter))
 
     def test_yoy_requires_same_fiscal_quarter(self) -> None:
         rows = pd.DataFrame([
@@ -91,6 +91,44 @@ class JQuantsNormalizationTest(unittest.TestCase):
         result = add_fiscal_yoy(rows)
         self.assertAlmostEqual(float(result.loc[1, "yoy"]), 20.0)
         self.assertTrue(pd.isna(result.loc[2, "yoy"]))
+
+    def test_profit_crossing_and_zero_do_not_create_misleading_percentage(self) -> None:
+        rows = pd.DataFrame([
+            {"ticker": "7203.T", "code": "7203", "metric": metric, "fiscal_year": year,
+             "fiscal_quarter": "Q1", "accounting_standard": "Japan GAAP", "consolidated_flag": True,
+             "is_derived": False, "unit": "JPY", "currency": "JPY", "value": value}
+            for metric, values in {"revenue": (1000, 1100), "operating_profit": (-100, 100), "net_income": (-100, 100), "eps": (-10, 10)}.items()
+            for year, value in zip(("2025", "2026"), values)
+        ])
+        result = add_fiscal_yoy(rows).set_index(["metric", "fiscal_year"])
+        self.assertEqual(result.loc[("net_income", "2026"), "comparison"], "profit_turnaround")
+        self.assertEqual(result.loc[("eps", "2026"), "comparison"], "profit_turnaround")
+        self.assertTrue(pd.isna(result.loc[("net_income", "2026"), "yoy"]))
+        self.assertAlmostEqual(float(result.loc[("revenue", "2026"), "yoy"]), 10.0)
+
+    def test_loss_widening_flat_and_zero_are_distinct(self) -> None:
+        rows = pd.DataFrame([
+            {"ticker": "7203.T", "code": "7203", "metric": "net_income", "fiscal_year": year,
+             "fiscal_quarter": "Q1", "accounting_standard": "Japan GAAP", "consolidated_flag": True,
+             "is_derived": False, "unit": "JPY", "currency": "JPY", "value": value}
+            for year, value in (("2024", -20), ("2025", -50), ("2026", -50))
+        ])
+        result = add_fiscal_yoy(rows)
+        self.assertEqual(result.loc[1, "comparison"], "loss_widening")
+        self.assertEqual(result.loc[2, "comparison"], "flat")
+
+    def test_missing_or_nonconsecutive_comparison_stays_unavailable(self) -> None:
+        rows = pd.DataFrame([
+            {"ticker": "7203.T", "code": "7203", "metric": "revenue", "fiscal_year": "2024",
+             "fiscal_quarter": "Q1", "accounting_standard": "Japan GAAP", "consolidated_flag": True,
+             "is_derived": False, "unit": "JPY", "currency": "JPY", "value": 100},
+            {"ticker": "7203.T", "code": "7203", "metric": "revenue", "fiscal_year": "2026",
+             "fiscal_quarter": "Q1", "accounting_standard": "Japan GAAP", "consolidated_flag": True,
+             "is_derived": False, "unit": "JPY", "currency": "JPY", "value": None},
+        ])
+        result = add_fiscal_yoy(rows)
+        self.assertEqual(result.loc[1, "comparison"], "unavailable")
+        self.assertTrue(pd.isna(result.loc[1, "yoy"]))
 
     def test_coverage_counts_only_actual_quarters(self) -> None:
         rows = pd.concat([self.normalized] * 2, ignore_index=True)

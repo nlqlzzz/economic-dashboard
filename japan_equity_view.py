@@ -7,7 +7,8 @@ import streamlit as st
 from japan_equity import CORE_20, build_core_snapshot, expected_proxy_names, top_observed_correlations
 from stock_detail import build_stock_detail_analysis
 from fundamentals import (build_annual_forecast_series, build_fundamentals_cards,
-    build_fundamentals_summary, chart_axis_ticks, format_eps, format_jpy, format_yoy)
+    build_fundamentals_summary, chart_axis_ticks, format_eps, format_financial_value,
+    format_jpy, format_yoy)
 from jquants_loader import JQuantsConfigurationError, fetch_financial_summaries, normalize_financial_summaries
 
 
@@ -293,11 +294,12 @@ def _render_fundamentals(detail: dict[str, object]) -> None:
                 st.markdown(f"**{card['label']}**")
                 st.markdown(f"### {card['value']}")
                 st.caption(card["yoy"])
-    latest = data["latest"].iloc[0]
+    latest = data["latest_period"]
     st.info(f"**業績モメンタム：{_ui_state(data['momentum'])}**\n\n{data.get('momentum_reason', '')}")
     if detail.get("interpretation"):
         st.caption(f"要約: {detail['interpretation']}")
-    st.caption(f"対象期: {latest.get('fiscal_year')} {latest.get('fiscal_quarter')} ｜ 開示日: {latest.get('disclosure_date')} ｜ 出典: {data['source']}")
+    period_kind = "累計/FY開示" if latest.get("fiscal_quarter") in {"Q2", "Q3", "FY"} else "単独四半期"
+    st.caption(f"対象期: {latest.get('fiscal_year')} {latest.get('fiscal_quarter')}（{period_kind}） ｜ 開示日: {latest.get('disclosure_date')} ｜ 出典: {data['source']}")
     tabs = st.tabs(["四半期推移", "会社予想", "詳細データ"])
     with tabs[0]:
         history = data["history"].copy()
@@ -306,9 +308,10 @@ def _render_fundamentals(detail: dict[str, object]) -> None:
         else:
             history["期"] = history["fiscal_year"].astype(str) + " " + history["fiscal_quarter"].astype(str)
             for metric, label in (("revenue", "売上高等"), ("net_income", "純利益"), ("eps", "EPS"), ("operating_profit", "営業利益")):
-                series = history[history.metric.eq(metric)][["期", "value"]].dropna()
+                series = history[history.metric.eq(metric)][["期", "value", "unit"]].dropna(subset=["value"])
                 if len(series) >= 4:
-                    st.caption(label + "（単独四半期・実績）")
+                    eps_note = "（開示された累計・通期EPS。単独四半期への差分導出はしません）" if metric == "eps" else "（単独四半期・実績）"
+                    st.caption(label + eps_note)
                     _render_actual_chart(series, metric)
                     annual = build_annual_forecast_series(data, metric)
                     if not annual.empty and annual["会社予想"].notna().any():
@@ -321,16 +324,17 @@ def _render_fundamentals(detail: dict[str, object]) -> None:
         else:
             labels = {"forecast_revenue": "会社予想 売上高等", "forecast_net_income": "会社予想 純利益", "forecast_eps": "会社予想 EPS", "forecast_operating_profit": "会社予想 営業利益"}
             for _, row in forecast.iterrows():
-                value = format_eps(row["value"]) if row["metric"] == "forecast_eps" else format_jpy(row["value"])
+                value = format_financial_value(row["value"], str(row["metric"]).replace("forecast_", ""), row.get("unit"))
                 st.write(f"**{labels.get(row['metric'], row['metric'])}**　{value}")
-            st.caption("会社が現在開示している通期業績予想です。四半期実績の次期値としては扱いません。")
+            st.caption(f"対象年度: {forecast.iloc[0].get('fiscal_year')} ｜ 開示日: {forecast.iloc[0].get('disclosure_date')}。四半期実績の次期値としては扱いません。")
     with tabs[2]:
         with st.expander("詳細データ・出所・導出方法を見る"):
             history = data["history"].copy()
             if not history.empty:
                 history["前年比"] = history["yoy"].map(format_yoy)
-                st.dataframe(history[["metric", "fiscal_year", "fiscal_quarter", "value", "前年比", "is_derived", "disclosure_date"]], hide_index=True, width="stretch")
-            st.caption("is_derived=true は累計開示から安全に導出した単独四半期です。")
+                history["比較"] = history["comparison"]
+                st.dataframe(history[["metric", "fiscal_year", "fiscal_quarter", "value", "比較", "前年比", "is_derived", "disclosure_date"]], hide_index=True, width="stretch")
+            st.caption("is_derived=true は売上・利益の累計開示から安全に導出した単独四半期です。EPSは差分導出しません。")
 
 
 def _render_stock_snapshot(detail: dict[str, object]) -> None:
@@ -507,19 +511,20 @@ def _number(value: object) -> str:
 
 
 def _render_actual_chart(series: pd.DataFrame, metric: str) -> None:
-    formatter = format_eps if metric == "eps" else format_jpy
+    unit = series["unit"].iloc[0] if "unit" in series and not series.empty else None
+    formatter = lambda value: format_financial_value(value, metric, unit)
     figure = go.Figure(go.Scatter(
         x=series["期"], y=series["value"], name="実績", mode="lines+markers",
         line={"color": "#4da3ff"}, marker={"symbol": "circle", "size": 8},
         customdata=[formatter(value) for value in series["value"]],
         hovertemplate="%{x}<br>実績: %{customdata}<extra></extra>",
     ))
-    figure.update_layout(**_chart_layout(series["value"], metric))
+    figure.update_layout(**_chart_layout(series["value"], metric, unit))
     st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
 
 
 def _render_annual_forecast_chart(series: pd.DataFrame, metric: str) -> None:
-    formatter = format_eps if metric == "eps" else format_jpy
+    formatter = lambda value: format_financial_value(value, metric, None)
     figure = go.Figure()
     for column, name, dash, symbol, color in (
         ("実績", "実績", "solid", "circle", "#4da3ff"),
@@ -533,12 +538,12 @@ def _render_annual_forecast_chart(series: pd.DataFrame, metric: str) -> None:
             customdata=[formatter(value) if pd.notna(value) else "—" for value in values],
             hovertemplate=f"%{{x}}<br>{name}: %{{customdata}}<extra></extra>",
         ))
-    figure.update_layout(**_chart_layout(pd.concat([series["実績"], series["会社予想"]]), metric))
+    figure.update_layout(**_chart_layout(pd.concat([series["実績"], series["会社予想"]]), metric, None))
     st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
 
 
-def _chart_layout(values: pd.Series, metric: str) -> dict[str, object]:
-    ticks = chart_axis_ticks(values, metric)
+def _chart_layout(values: pd.Series, metric: str, unit: object = None) -> dict[str, object]:
+    ticks = chart_axis_ticks(values, metric, unit)
     return {
         "height": 280, "margin": {"l": 22, "r": 12, "t": 18, "b": 38},
         "legend": {"orientation": "h", "y": -0.22},

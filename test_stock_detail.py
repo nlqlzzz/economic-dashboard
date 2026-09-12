@@ -7,6 +7,7 @@ from japan_equity_view import _missing
 from price_quality import inspect_price_series
 from stock_detail import (
     build_stock_detail_analysis,
+    build_interpretation,
     classify_stock_specific_move,
     select_core20_anchors,
 )
@@ -103,6 +104,15 @@ class StockDetailTest(unittest.TestCase):
             CORE_20[0], broken, inspect_price_series(topix), macros, CORE_20, prices
         )
         self.assertEqual(detail["market_exposure"]["status"], "Unavailable")
+
+    def test_price_decline_and_earnings_improvement_are_not_called_aligned(self) -> None:
+        text = build_interpretation(
+            CORE_20[0], {"explainability": {"classification": "Macro-unexplained"}, "primary_drivers": []},
+            {"residual_1m": -20.0}, {"classification": "Stock-specific / Unexplained"},
+            {"momentum": "Strong"},
+        )
+        self.assertIn("方向は一致しておらず", text)
+        self.assertNotIn("整合性", text)
 
 
 if __name__ == "__main__":

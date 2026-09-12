@@ -140,9 +140,14 @@ def build_interpretation(
     drivers = [row for row in macro.get("primary_drivers", []) if row.get("stability") == "High"]
     if movement["classification"] == "Stock-specific / Unexplained":
         if earnings in {"Strong", "Improving"}:
-            return "Market / Macroでの説明力は限定的ですが、直近Earningsの改善とは一定の整合性があります。原因を断定せず、企業固有材料も確認候補です。"
+            residual_1m = residual_periods.get("residual_1m")
+            if residual_1m is not None and float(residual_1m) < 0:
+                return "直近1か月の市場調整後リターンは下落、比較可能な最新決算は改善です。方向は一致しておらず、業績だけで値動きは説明できません。"
+            if residual_1m is not None and float(residual_1m) > 0:
+                return "直近1か月の市場調整後リターンと比較可能な最新決算はともに改善です。ただし、開示時点や他の企業固有材料を確認しない限り因果関係は判断できません。"
+            return "比較可能な最新決算は改善ですが、市場・Macroでの説明力は限定的です。業績だけで最近の値動きの原因は判断できません。"
         if earnings in {"Weakening", "Mixed"}:
-            return "Market / Macroおよび直近Earningsの双方では、最近の値動きを十分説明できていません。News / Corporate Eventsの確認候補です。"
+            return "Market / Macroと比較可能な最新決算だけでは、最近の値動きを十分説明できていません。企業開示などの追加情報を確認する余地があります。"
         return (
             "TOPIX比・市場調整後Residualに注目すべき動きが残る一方、現在登録されているPrimary Driverの説明力は限定的です。"
             "企業固有要因を確認する価値があります。"
@@ -150,8 +155,7 @@ def build_interpretation(
     if drivers:
         driver = drivers[0]
         direction = "正" if float(driver["correlation_120d"]) > 0 else "負"
-        suffix = " Macro環境と直近Earningsは同方向です。" if earnings in {"Strong", "Improving"} else ""
-        return f"市場調整後も{driver['driver']}との{direction}の関係が複数期間で確認されています。最近の値動きはMacroとの整合性が比較的高い状態です。{suffix}"
+        return f"市場調整後の{driver['driver']}との{direction}の相関は複数期間で確認されています。ただし相関だけから、足元のMacro環境が追い風・逆風であることや最近の値動きの要因は判断できません。"
     if explainability == "Unavailable":
         return "市場調整後の定量分析に必要なデータまたはPrimary Driver Proxyが不足しています。"
     return "Primary Driverとの関係は確認できますが、期間ごとの安定性または説明力は限定的です。"
@@ -160,7 +164,7 @@ def build_interpretation(
 def next_analysis_guidance(macro: Mapping[str, object], movement: Mapping[str, str]) -> str:
     explainability = str(macro.get("explainability", {}).get("classification", "Unavailable"))
     if movement["classification"] == "Stock-specific / Unexplained" or explainability in {"Low", "Macro-unexplained"}:
-        return "次の確認候補: 将来のEarnings / Fundamentals / Newsで企業固有の材料を確認。"
+        return "次の確認候補: 最新の業績・会社予想・企業開示を、対象期と開示日をそろえて確認。"
     if explainability in {"High", "Medium"}:
         return "次の確認候補: Primary Driverの方向・安定性の変化を重点的に確認。"
     return "次の確認候補: 利用可能なPrimary Driver Proxyとデータ品質を確認。"
