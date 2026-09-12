@@ -2,6 +2,8 @@ import unittest
 
 import pandas as pd
 
+from price_quality import inspect_price_series
+
 from japan_equity import (
     CORE_20,
     aggregate_by_sector,
@@ -162,6 +164,27 @@ class MarketAdjustedSensitivityTest(unittest.TestCase):
         series = pd.Series(range(100), dtype=float)
         result = estimate_market_model(series, series, minimum_observations=200)
         self.assertFalse(result["available"])
+
+    def test_residual_excludes_rows_whose_return_start_dates_differ(self) -> None:
+        index = pd.date_range("2024-01-01", periods=280, freq="B")
+        market = pd.Series(range(100, 380), index=index, dtype=float)
+        stock = pd.Series(range(200, 480), index=index, dtype=float).drop(index[150])
+        residual, model = residual_returns(stock, market)
+        self.assertTrue(model["available"])
+        self.assertNotIn(index[150], residual.index)
+        self.assertNotIn(index[151], residual.index)
+
+    def test_quality_removed_date_does_not_create_a_multiday_residual_pair(self) -> None:
+        index = pd.date_range("2024-01-01", periods=280, freq="B")
+        market = pd.Series(range(100, 380), index=index, dtype=float)
+        raw_stock = pd.Series(range(200, 480), index=index, dtype=float)
+        raw_stock.iloc[150] *= 0.1
+        quality = inspect_price_series(raw_stock)
+        self.assertEqual(quality.status, "cleaned")
+        residual, model = residual_returns(quality.series, market)
+        self.assertTrue(model["available"])
+        self.assertNotIn(index[150], residual.index)
+        self.assertNotIn(index[151], residual.index)
 
     def test_active_return_is_stock_minus_topix(self) -> None:
         index = pd.date_range("2025-01-01", periods=100, freq="B")

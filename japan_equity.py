@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from correlation_analysis import build_daily_change_frame, correlation_change_summary
+from correlation_analysis import align_change_series, build_daily_change_frame, correlation_change_summary
 from price_quality import PriceQualityResult, inspect_price_series
 from utils import percent_change_since
 
@@ -323,6 +323,7 @@ def residual_returns(
     pair = frame[["stock", "market"]].dropna()
     residual = pair["stock"] - float(model["intercept"]) - float(model["beta"]) * pair["market"]
     residual.name = "Market-adjusted Return"
+    residual.attrs["period_start"] = frame.attrs["period_metadata"].starts["stock"].reindex(residual.index)
     return residual, model
 
 
@@ -439,7 +440,7 @@ def _primary_driver_rows(
             rows.append({**identity, **_unavailable_driver("Residual ReturnまたはDriverデータがありません")})
             continue
         transformed, _ = build_daily_change_frame({"macro": macro}, {"macro": _macro_method(proxy)})
-        pair = pd.concat({"residual": residual, "macro": transformed["macro"]}, axis=1, sort=False).dropna()
+        pair = _aligned_residual_macro_pair(residual, transformed, "macro")
         correlations = {window: _tail_correlation(pair, window) for window in PRIMARY_WINDOWS}
         observations = {window: min(len(pair), window) for window in PRIMARY_WINDOWS}
         stability, reason = classify_driver_stability(correlations, observations)
@@ -475,7 +476,7 @@ def _observed_correlation_rows(
         if macro.empty:
             continue
         transformed, _ = build_daily_change_frame({"macro": macro}, {"macro": _macro_method(name)})
-        pair = pd.concat({"residual": residual, "macro": transformed["macro"]}, axis=1, sort=False).dropna()
+        pair = _aligned_residual_macro_pair(residual, transformed, "macro")
         rows.append({
             **_stock_identity(stock), "macro": name,
             "correlation_120d": _tail_correlation(pair, 120),
@@ -506,7 +507,9 @@ def _primary_regression(
         if usable.empty:
             continue
         transformed, _ = build_daily_change_frame({proxy: usable}, {proxy: _macro_method(proxy)})
-        data[proxy] = transformed[proxy]
+        starts = transformed.attrs["period_metadata"].starts[proxy].reindex(data.index)
+        stock_starts = frame.attrs["period_metadata"].starts["stock"].reindex(data.index)
+        data[proxy] = transformed[proxy].where(starts.eq(stock_starts))
     proxy_names = [proxy for proxy in proxy_names if proxy in data]
     data = data.dropna().tail(MARKET_BETA_WINDOW)
     if len(data) < 120 or not proxy_names:
@@ -531,6 +534,15 @@ def _quality_checked_macro(name: str, series: pd.Series) -> pd.Series:
         return clean
     quality = inspect_price_series(clean)
     return quality.series if quality.usable else pd.Series(dtype=float)
+
+
+def _aligned_residual_macro_pair(
+    residual: pd.Series, transformed: pd.DataFrame, macro_column: str
+) -> pd.DataFrame:
+    residual_starts = pd.Series(residual.attrs.get("period_start", {}), dtype="datetime64[ns]")
+    macro_starts = transformed.attrs["period_metadata"].starts[macro_column]
+    pair = align_change_series(residual, transformed[macro_column], residual_starts, macro_starts)
+    return pair.rename(columns={"left": "residual", "right": "macro"})
 
 
 def macro_information_timing(name: str) -> str:

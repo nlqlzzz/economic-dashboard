@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pandas as pd
 
 
@@ -10,20 +12,35 @@ CORRELATION_METHOD_LABELS = {
 }
 
 DAILY_CHANGE_LABELS = {
-    "return": "日次騰落率（%）",
-    "change": "日次変化幅（pt）",
+    "return": "観測間騰落率（%）",
+    "change": "観測間変化幅（pt）",
 }
+
+
+@dataclass(eq=False)
+class ChangePeriodMetadata:
+    starts: pd.DataFrame
+
+    def __eq__(self, other: object) -> bool:
+        return self is other
 
 
 def build_daily_change_frame(
     series_by_name: dict[str, pd.Series], methods_by_name: dict[str, str]
 ) -> tuple[pd.DataFrame, dict[str, str]]:
-    """価格は日次騰落率、金利・金利差は日次変化幅へ変換する。"""
+    """価格は観測間騰落率、金利・金利差は観測間変化幅へ変換する。
+
+    二系列の場合は、終了日だけでなく直前の有効観測日も一致する行だけを
+    残す。三系列以上は無関係な欠損を波及させず、呼び出し側が実際に比較
+    する組み合わせごとに ``align_change_series`` を使う。
+    """
     transformed: dict[str, pd.Series] = {}
+    period_starts: dict[str, pd.Series] = {}
     labels: dict[str, str] = {}
     for name, series in series_by_name.items():
         method = methods_by_name.get(name, "return")
         cleaned = series.sort_index().dropna()
+        starts = cleaned.index.to_series(index=cleaned.index).shift(1)
         if method == "return":
             transformed[name] = cleaned.pct_change(fill_method=None) * 100
         elif method == "change":
@@ -31,9 +48,36 @@ def build_daily_change_frame(
         else:
             raise ValueError(f"未対応の日次変換方法です: {method}")
         labels[name] = DAILY_CHANGE_LABELS[method]
+        period_starts[name] = starts
 
-    frame = pd.concat(transformed, axis=1).sort_index()
-    return frame.replace([float("inf"), float("-inf")], pd.NA), labels
+    frame = pd.concat(transformed, axis=1, sort=False).sort_index()
+    starts_frame = pd.concat(period_starts, axis=1, sort=False).reindex(frame.index)
+    frame = frame.replace([float("inf"), float("-inf")], pd.NA)
+    if len(frame.columns) == 2:
+        left, right = frame.columns
+        comparable = starts_frame[left].eq(starts_frame[right])
+        frame.loc[~comparable, [left, right]] = pd.NA
+    frame.attrs["period_metadata"] = ChangePeriodMetadata(starts_frame)
+    return frame, labels
+
+
+def align_change_series(
+    left: pd.Series,
+    right: pd.Series,
+    left_starts: pd.Series,
+    right_starts: pd.Series,
+) -> pd.DataFrame:
+    """Keep transformed observations with identical start and end dates."""
+    pair = pd.concat({"left": left, "right": right}, axis=1, sort=False)
+    starts = pd.concat(
+        {"left": pd.to_datetime(left_starts), "right": pd.to_datetime(right_starts)},
+        axis=1,
+        sort=False,
+    ).reindex(pair.index)
+    comparable = starts["left"].eq(starts["right"])
+    result = pair.where(comparable, pd.NA).dropna()
+    result.attrs["period_metadata"] = ChangePeriodMetadata(starts.loc[result.index])
+    return result
 
 
 def correlation_change_summary(
