@@ -34,7 +34,7 @@ class FundamentalsTest(unittest.TestCase):
         self.assertEqual(format_jpy(817_200_000_000), "8,172億円")
         self.assertEqual(format_eps(62.0), "62円")
         self.assertEqual(format_yoy(1.9), "前年比 +1.9%")
-        self.assertEqual(format_financial_value(100, "revenue", None), "100（単位未確認）")
+        self.assertEqual(format_financial_value(12_597_348_000_000, "revenue", "JPY"), "12.6兆円")
 
     def test_mobile_card_payload_is_compact(self):
         cards = build_fundamentals_cards(build_fundamentals_summary(records(), "自動車"))

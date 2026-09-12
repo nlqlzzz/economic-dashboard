@@ -169,7 +169,10 @@ def normalize_financial_summaries(
             "fiscal_year": fiscal_end[:4] if fiscal_end else None,
             "fiscal_quarter": period_type, "document_type": document_type,
             "accounting_standard": _accounting_standard(document_type),
-            "consolidated_flag": _consolidated_flag(document_type), "unit": None, "currency": "JPY",
+            # Financial Summary monetary fields are delivered as yen values.
+            # Persist the unit so every UI surface can use the same compact
+            # trillion / hundred-million-yen formatter.
+            "consolidated_flag": _consolidated_flag(document_type), "unit": "JPY", "currency": "JPY",
             "is_cumulative": _is_cumulative(period_type, cur_start, fiscal_start), "is_derived": False,
             "source_name": SOURCE_NAME, "source_url": SOURCE_URL, "fetched_at": fetched_at,
         }
