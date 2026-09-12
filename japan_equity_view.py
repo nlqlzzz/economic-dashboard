@@ -26,10 +26,11 @@ def render_japan_core_equity(
     st.markdown("### Japan Core 20")
     st.caption(
         "日本の主要大型株20社について、絶対リターン、TOPIX連動ETF比、"
-        "直近のマクロ相関を確認します。売買判断や業種指数ではありません。"
+        "直近のマクロ相関を確認します。価格はYahoo Financeのauto_adjust=Trueによる調整後終値です。"
+        "売買判断や業種指数ではありません。"
     )
     if market_map.empty or not market_map["status"].eq("Available").any():
-        st.warning("Core 20の株価を取得できないため、日本株分析を表示できません。")
+        st.warning("品質・鮮度・履歴条件を満たすCore 20価格がないため、日本株分析を表示できません。")
         return
 
     _render_snapshot(market_map)
@@ -56,7 +57,14 @@ def _render_snapshot(market_map: pd.DataFrame) -> None:
     second[0].metric("1か月最強", snapshot["strongest_1m"] or "—")
     second[1].metric("1か月最弱", snapshot["weakest_1m"] or "—")
     if snapshot["unavailable"]:
-        st.caption(f"取得済み {snapshot['available']}/20社｜取得不能 {snapshot['unavailable']}社")
+        status_counts = market_map.loc[~market_map["status"].eq("Available"), "status"].value_counts()
+        detail = " / ".join(f"{name} {count}社" for name, count in status_counts.items())
+        st.caption(f"分析可能 {snapshot['available']}/20社｜除外 {snapshot['unavailable']}社（{detail}）")
+    quality_rows = market_map[market_map.get("quality_status", pd.Series(index=market_map.index, dtype=str)).isin(["cleaned", "blocked"])]
+    if not quality_rows.empty:
+        with st.expander("価格品質の処理を見る"):
+            for _, row in quality_rows.iterrows():
+                st.caption(f"{row['name']}: {row.get('quality_reason') or row.get('quality_status')}")
 
 
 def _render_market_map(market_map: pd.DataFrame) -> None:
@@ -109,7 +117,8 @@ def _render_macro_sensitivity(market_map: pd.DataFrame, sensitivity: dict[str, p
     st.markdown("#### Macro Sensitivity")
     st.caption(
         "Market Exposureと、市場共通要因を除いたPrimary Driverとの同時点の関係を分けて確認します。"
-        "先行性・因果関係・恒常的な感応度を示すものではありません。"
+        "米国市場と日本株の同日終値は、日本市場の判断時点では利用できない事後的な連動性です。"
+        "先行性・因果関係・予測力・売買成績を示すものではありません。"
     )
     available = market_map[market_map["status"].eq("Available")]
     options = {f"{row['name']}（{row['code']}）": row["ticker"] for _, row in available.iterrows()}

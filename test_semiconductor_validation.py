@@ -41,7 +41,9 @@ class SemiconductorValidationTest(unittest.TestCase):
         provisional = build_overseas_validation_signals(frame, strict=False)
         self.assertNotIn("taiwan_orders", strict.columns)
         self.assertIn("taiwan_orders", provisional.columns)
-        self.assertEqual(strict.attrs["validation_mode"], "strict")
+        self.assertEqual(strict.attrs["validation_mode"], "release_date_confirmed")
+        self.assertEqual(strict.attrs["publication_time_status"], "unknown")
+        self.assertEqual(strict.attrs["revision_history_status"], "not_verified")
         self.assertEqual(provisional.attrs["validation_mode"], "provisional")
 
     def test_partial_periods_never_enter_historical_signals(self) -> None:
@@ -49,13 +51,35 @@ class SemiconductorValidationTest(unittest.TestCase):
         result = build_overseas_validation_signals(frame, strict=False)
         self.assertNotIn("korea_partial", result.columns)
 
-    def test_future_return_starts_before_release_and_targets_after_release(self) -> None:
+    def test_price_reaction_starts_before_release_and_is_labeled_separately(self) -> None:
+        prices = pd.Series(range(100, 221), index=pd.date_range("2025-12-01", periods=121, freq="D"), dtype=float)
+        condition = pd.Series([True], index=[pd.Timestamp("2026-01-15")])
+        result = analyze_release_aware_returns(condition, prices, horizons=(1,), mode="reaction")
+        base = prices.loc[prices.index < pd.Timestamp("2026-01-15")].iloc[-1]
+        target = prices.loc[prices.index >= pd.Timestamp("2026-02-14")].iloc[0]
+        self.assertAlmostEqual(result.iloc[0]["平均"], (target / base - 1) * 100)
+        self.assertIn("公表前後", result.iloc[0]["評価方法"])
+
+    def test_post_release_evaluation_never_uses_pre_release_close(self) -> None:
         prices = pd.Series(range(100, 221), index=pd.date_range("2025-12-01", periods=121, freq="D"), dtype=float)
         condition = pd.Series([True], index=[pd.Timestamp("2026-01-15")])
         result = analyze_release_aware_returns(condition, prices, horizons=(1,))
-        base = prices.loc[prices.index < pd.Timestamp("2026-01-15")].iloc[-1]
-        target = prices.loc[prices.index >= pd.Timestamp("2026-02-15")].iloc[0]
+        base = prices.loc[prices.index > pd.Timestamp("2026-01-15")].iloc[0]
+        target = prices.loc[prices.index >= pd.Timestamp("2026-02-16")].iloc[0]
         self.assertAlmostEqual(result.iloc[0]["平均"], (target / base - 1) * 100)
+
+    def test_staggered_publications_keep_each_last_known_improvement(self) -> None:
+        index = pd.to_datetime(["2026-01-10", "2026-01-20", "2026-02-10", "2026-02-20"])
+        signals = pd.DataFrame({
+            "taiwan_orders": [100.0, None, 110.0, None],
+            "korea_semiconductor_exports_monthly": [None, 200.0, None, 220.0],
+        }, index=index)
+        result = add_global_condition_signals(signals)
+        self.assertTrue(pd.isna(result.iloc[0]["Taiwan Improving"]))
+        self.assertTrue(pd.isna(result.iloc[1]["Korea Improving"]))
+        self.assertTrue(result.iloc[-1]["Taiwan Improving"])
+        self.assertTrue(result.iloc[-1]["Korea Improving"])
+        self.assertTrue(result.iloc[-1]["Taiwan AND Korea Improving"])
 
     def test_release_aware_correlation_handles_irregular_months_without_future_leak(self) -> None:
         prices = pd.Series(range(100, 301), index=pd.date_range("2025-12-01", periods=201, freq="D"), dtype=float)

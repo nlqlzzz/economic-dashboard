@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from validation_timing import condition_onsets, evaluate_release_return, exclusion_summary
+
 
 RETURN_HORIZONS = {1: "1か月後", 3: "3か月後", 6: "6か月後"}
 
@@ -81,7 +83,9 @@ def build_overseas_validation_signals(
     if selected.empty:
         return pd.DataFrame()
     pivot = selected.pivot_table(index="available_at", columns="series_id", values="yoy", aggfunc="last").sort_index()
-    pivot.attrs["validation_mode"] = "strict" if strict else "provisional"
+    pivot.attrs["validation_mode"] = "release_date_confirmed" if strict else "provisional"
+    pivot.attrs["publication_time_status"] = "unknown"
+    pivot.attrs["revision_history_status"] = "not_verified"
     pivot.attrs["availability_method"] = method
     return pivot
 
@@ -94,16 +98,22 @@ def add_global_condition_signals(
     taiwan_columns = [column for column in result if str(column).startswith("taiwan_")]
     korea_columns = [column for column in result if str(column).startswith("korea_")]
     if taiwan_columns:
-        taiwan = result[taiwan_columns].mean(axis=1)
-        result["Taiwan Improving"] = (taiwan > taiwan.shift(1)).astype("boolean")
-        result["Taiwan YoY Positive"] = (taiwan > 0).astype("boolean")
+        taiwan = result[taiwan_columns].mean(axis=1, skipna=True).where(result[taiwan_columns].notna().any(axis=1))
+        result["Taiwan Improving"] = asof_improving(taiwan)
+        result["Taiwan YoY Positive"] = taiwan.ffill().gt(0).where(taiwan.ffill().notna()).astype("boolean")
+        result["Taiwan Last Release"] = _last_valid_release(taiwan)
+        result["Taiwan Stale"] = _stale_release(result.index, result["Taiwan Last Release"])
     if korea_columns:
-        korea = result[korea_columns].mean(axis=1)
-        result["Korea Improving"] = (korea > korea.shift(1)).astype("boolean")
-        result["Korea YoY Positive"] = (korea > 0).astype("boolean")
-        result["Korea YoY Above 20"] = (korea > 20).astype("boolean")
+        korea = result[korea_columns].mean(axis=1, skipna=True).where(result[korea_columns].notna().any(axis=1))
+        result["Korea Improving"] = asof_improving(korea)
+        result["Korea YoY Positive"] = korea.ffill().gt(0).where(korea.ffill().notna()).astype("boolean")
+        result["Korea YoY Above 20"] = korea.ffill().gt(20).where(korea.ffill().notna()).astype("boolean")
+        result["Korea Last Release"] = _last_valid_release(korea)
+        result["Korea Stale"] = _stale_release(result.index, result["Korea Last Release"])
     if "Taiwan Improving" in result and "Korea Improving" in result:
         result["Taiwan AND Korea Improving"] = result["Taiwan Improving"] & result["Korea Improving"]
+        stale = result["Taiwan Stale"] | result["Korea Stale"]
+        result["Taiwan AND Korea Improving"] = result["Taiwan AND Korea Improving"].mask(stale, pd.NA)
     if japan_signals is not None and not japan_signals.empty:
         japan = japan_signals.copy().sort_index().reindex(result.index, method="ffill")
         japan_improving = japan.mean(axis=1) > 0
@@ -117,19 +127,22 @@ def analyze_release_aware_returns(
     condition: pd.Series,
     asset_prices: pd.Series,
     horizons: tuple[int, ...] = (1, 3, 6),
+    *,
+    mode: str = "post_release",
+    as_of: object | None = None,
 ) -> pd.DataFrame:
-    """条件を知り得た日の直前終値から将来リターンを集計する。"""
-    selected_dates = pd.DatetimeIndex(condition.index[condition.fillna(False).astype(bool)])
-    prices = _clean_prices(asset_prices)
+    """公表後評価または公表前後の価格反応を、満了サンプルだけで集計する。"""
+    selected_dates = condition_onsets(condition)
     rows: list[dict[str, object]] = []
     for horizon in horizons:
         returns: list[float] = []
+        statuses: list[str] = []
+        excluded_prices = 0
         for available_at in selected_dates:
-            base = prices.loc[prices.index < pd.Timestamp(available_at)]
-            target = prices.loc[prices.index >= pd.Timestamp(available_at) + pd.DateOffset(months=horizon)]
-            if base.empty or target.empty or base.iloc[-1] == 0:
-                continue
-            returns.append(float((target.iloc[0] / base.iloc[-1] - 1) * 100))
+            observation = evaluate_release_return(asset_prices, available_at, horizon, mode=mode, as_of=as_of)
+            statuses.append(observation.status)
+            excluded_prices = max(excluded_prices, observation.excluded_observations)
+            if observation.value is not None: returns.append(observation.value)
         sample = pd.Series(returns, dtype=float)
         count = len(sample)
         rows.append(
@@ -143,6 +156,9 @@ def analyze_release_aware_returns(
                 "最悪値": None if sample.empty else float(sample.min()),
                 "最良値": None if sample.empty else float(sample.max()),
                 "サンプル数": count,
+                "除外": exclusion_summary(statuses),
+                "価格品質": f"一時的不連続 {excluded_prices}観測除外" if excluded_prices else "確認済み",
+                "評価方法": "公表後評価" if mode == "post_release" else "公表前後の価格反応",
                 "注意": sample_warning(count),
             }
         )
@@ -153,19 +169,22 @@ def analyze_release_aware_correlation(
     signal: pd.Series,
     asset_prices: pd.Series,
     horizons: tuple[int, ...] = (1, 3, 6),
+    *,
+    mode: str = "post_release",
+    as_of: object | None = None,
 ) -> pd.DataFrame:
     """実際の利用可能日以降の市場リターンとの相関を集計する。"""
     clean_signal = pd.to_numeric(signal, errors="coerce").dropna().sort_index()
-    prices = _clean_prices(asset_prices)
     rows: list[dict[str, object]] = []
     for horizon in horizons:
         pairs: list[tuple[float, float]] = []
+        statuses: list[str] = []
+        excluded_prices = 0
         for available_at, value in clean_signal.items():
-            base = prices.loc[prices.index < pd.Timestamp(available_at)]
-            target = prices.loc[prices.index >= pd.Timestamp(available_at) + pd.DateOffset(months=horizon)]
-            if base.empty or target.empty or base.iloc[-1] == 0:
-                continue
-            pairs.append((float(value), float((target.iloc[0] / base.iloc[-1] - 1) * 100)))
+            observation = evaluate_release_return(asset_prices, available_at, horizon, mode=mode, as_of=as_of)
+            statuses.append(observation.status)
+            excluded_prices = max(excluded_prices, observation.excluded_observations)
+            if observation.value is not None: pairs.append((float(value), observation.value))
         sample = pd.DataFrame(pairs, columns=["signal", "return"])
         count = len(sample)
         rows.append(
@@ -173,6 +192,9 @@ def analyze_release_aware_correlation(
                 "期間": RETURN_HORIZONS.get(horizon, f"{horizon}か月後"),
                 "相関": None if count < 2 else float(sample.corr().iloc[0, 1]),
                 "サンプル数": count,
+                "除外": exclusion_summary(statuses),
+                "価格品質": f"一時的不連続 {excluded_prices}観測除外" if excluded_prices else "確認済み",
+                "評価方法": "公表後評価" if mode == "post_release" else "公表前後の価格反応",
                 "注意": sample_warning(count),
             }
         )
@@ -195,3 +217,24 @@ def _clean_prices(series: pd.Series) -> pd.Series:
     clean = pd.to_numeric(series, errors="coerce").dropna().sort_index().copy()
     clean.index = pd.DatetimeIndex(clean.index).tz_localize(None).normalize()
     return clean[~clean.index.duplicated(keep="last")]
+
+
+def asof_improving(series: pd.Series) -> pd.Series:
+    """Compare only consecutive valid releases, then carry that known state forward."""
+    valid = pd.to_numeric(series, errors="coerce").dropna()
+    at_release = valid.diff().gt(0).astype("boolean")
+    if not at_release.empty:
+        at_release.iloc[0] = pd.NA
+    return at_release.reindex(series.index).ffill().astype("boolean")
+
+
+def _last_valid_release(series: pd.Series) -> pd.Series:
+    releases = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+    releases.loc[series.notna()] = pd.DatetimeIndex(series.index[series.notna()])
+    return releases.ffill()
+
+
+def _stale_release(index: pd.Index, last_release: pd.Series, maximum_age_days: int = 62) -> pd.Series:
+    current = pd.Series(pd.DatetimeIndex(index), index=index)
+    age = current - pd.to_datetime(last_release)
+    return age.gt(pd.Timedelta(days=maximum_age_days)).where(last_release.notna(), pd.NA).astype("boolean")

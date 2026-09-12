@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from correlation_analysis import build_daily_change_frame, correlation_change_summary
-from price_quality import PriceQualityResult
+from price_quality import PriceQualityResult, inspect_price_series
 from utils import percent_change_since
 
 
@@ -82,10 +82,16 @@ def build_market_map(
     topix: pd.Series,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    topix_returns = _period_returns(topix)
+    topix_quality = inspect_price_series(topix)
+    usable_topix = topix_quality.series if topix_quality.usable else pd.Series(dtype=float)
     for stock in CORE_20:
-        series = prices[stock["ticker"]] if stock["ticker"] in prices else pd.Series(dtype=float)
+        raw_series = prices[stock["ticker"]] if stock["ticker"] in prices else pd.Series(dtype=float)
+        quality = inspect_price_series(raw_series)
+        series = quality.series if quality.usable else pd.Series(dtype=float)
         returns = _period_returns(series)
+        relative_1m, relative_1m_start, relative_1m_end = _aligned_relative_return(series, usable_topix, months=1)
+        relative_3m, relative_3m_start, relative_3m_end = _aligned_relative_return(series, usable_topix, months=3)
+        status = _market_map_status(series, usable_topix, quality, returns)
         rows.append(
             {
                 **stock,
@@ -94,9 +100,13 @@ def build_market_map(
                 "return_5d": returns["return_5d"],
                 "return_1m": returns["return_1m"],
                 "return_3m": returns["return_3m"],
-                "relative_1m": _difference(returns["return_1m"], topix_returns["return_1m"]),
-                "relative_3m": _difference(returns["return_3m"], topix_returns["return_3m"]),
-                "status": "Available" if not series.dropna().empty else "Unavailable",
+                "relative_1m": relative_1m, "relative_3m": relative_3m,
+                "relative_1m_start": relative_1m_start, "relative_1m_end": relative_1m_end,
+                "relative_3m_start": relative_3m_start, "relative_3m_end": relative_3m_end,
+                "status": status, "quality_status": quality.status,
+                "quality_reason": quality.reason,
+                "excluded_observations": len(quality.excluded_dates),
+                "price_basis": "Yahoo Finance auto_adjust=True の調整後終値",
             }
         )
     return pd.DataFrame(rows)
@@ -138,12 +148,20 @@ def calculate_macro_sensitivity(
     for ticker, stock in master.items():
         if ticker not in prices or prices[ticker].dropna().empty:
             continue
+        stock_quality = inspect_price_series(prices[ticker])
+        if not stock_quality.usable:
+            continue
         for macro_name, macro in macro_series.items():
             if macro.dropna().empty:
                 continue
-            methods = {ticker: "return", macro_name: _macro_method(macro_name)}
+            method = _macro_method(macro_name)
+            macro_quality = inspect_price_series(macro) if method == "return" else None
+            usable_macro = macro_quality.series if macro_quality is not None and macro_quality.usable else macro
+            if macro_quality is not None and not macro_quality.usable:
+                continue
+            methods = {ticker: "return", macro_name: method}
             daily, _ = build_daily_change_frame(
-                {ticker: prices[ticker], macro_name: macro}, methods
+                {ticker: stock_quality.series, macro_name: usable_macro}, methods
             )
             summary = correlation_change_summary(daily[ticker], daily[macro_name])
             if summary.empty:
@@ -164,6 +182,7 @@ def calculate_macro_sensitivity(
                     "percentile_60d": None if row60 is None else row60.get("percentile"),
                     "observations": 0 if row60 is None else int(row60["共通観測数"]),
                     "is_expected_driver": macro_name in expected_proxy_names(stock),
+                    "information_timing": macro_information_timing(macro_name),
                 }
             )
     return pd.DataFrame(rows)
@@ -210,13 +229,17 @@ def build_macro_sensitivity_analysis(
 
     for stock in stocks or CORE_20:
         ticker = str(stock["ticker"])
-        stock_prices = prices[ticker] if ticker in prices else pd.Series(dtype=float)
+        raw_stock_prices = prices[ticker] if ticker in prices else pd.Series(dtype=float)
+        stock_quality = inspect_price_series(raw_stock_prices)
+        stock_prices = stock_quality.series if stock_quality.usable else pd.Series(dtype=float)
         relative_1m = _lookup_market_value(market_lookup, ticker, "relative_1m")
         relative_3m = _lookup_market_value(market_lookup, ticker, "relative_3m")
         exposure, residual = _market_exposure(
             stock_prices, topix_quality, relative_1m, relative_3m
         )
-        exposure_rows.append({**_stock_identity(stock), **exposure})
+        exposure_rows.append({**_stock_identity(stock), **exposure,
+                              "quality_status": stock_quality.status,
+                              "quality_reason": stock_quality.reason})
 
         stock_primary = _primary_driver_rows(stock, residual, macro_series)
         primary_rows.extend(stock_primary)
@@ -242,12 +265,12 @@ def build_macro_sensitivity_analysis(
 def summarize_stock_performance(stock_prices: pd.Series, topix_prices: pd.Series) -> dict[str, float | None]:
     """Return reusable performance fields for a Core 20 or future arbitrary ticker."""
     stock_returns = _period_returns(stock_prices)
-    topix_returns = _period_returns(topix_prices)
+    aligned = {months: _aligned_relative_return(stock_prices, topix_prices, months=months) for months in (1, 3, 6)}
     return {
         **stock_returns,
-        "relative_1m": _difference(stock_returns["return_1m"], topix_returns["return_1m"]),
-        "relative_3m": _difference(stock_returns["return_3m"], topix_returns["return_3m"]),
-        "relative_6m": _difference(stock_returns["return_6m"], topix_returns["return_6m"]),
+        **{f"relative_{months}m": aligned[months][0] for months in (1, 3, 6)},
+        **{f"relative_{months}m_start": aligned[months][1] for months in (1, 3, 6)},
+        **{f"relative_{months}m_end": aligned[months][2] for months in (1, 3, 6)},
     }
 
 
@@ -411,7 +434,7 @@ def _primary_driver_rows(
         if proxy in seen:
             continue
         seen.add(proxy)
-        macro = macro_series.get(proxy, pd.Series(dtype=float))
+        macro = _quality_checked_macro(proxy, macro_series.get(proxy, pd.Series(dtype=float)))
         if residual.empty or macro.dropna().empty:
             rows.append({**identity, **_unavailable_driver("Residual ReturnまたはDriverデータがありません")})
             continue
@@ -434,6 +457,7 @@ def _primary_driver_rows(
             "direction": direction,
             "stability": stability,
             "reason": reason,
+            "information_timing": macro_information_timing(proxy),
         })
     return rows
 
@@ -447,6 +471,9 @@ def _observed_correlation_rows(
     for name, macro in macro_series.items():
         if name == MARKET_PROXY_NAME or macro.dropna().empty:
             continue
+        macro = _quality_checked_macro(name, macro)
+        if macro.empty:
+            continue
         transformed, _ = build_daily_change_frame({"macro": macro}, {"macro": _macro_method(name)})
         pair = pd.concat({"residual": residual, "macro": transformed["macro"]}, axis=1, sort=False).dropna()
         rows.append({
@@ -455,6 +482,7 @@ def _observed_correlation_rows(
             "correlation_60d": _tail_correlation(pair, 60),
             "correlation_20d": _tail_correlation(pair, 20),
             "observations": len(pair),
+            "information_timing": macro_information_timing(name),
         })
     return rows
 
@@ -474,8 +502,12 @@ def _primary_regression(
     proxy_names = list(dict.fromkeys(proxy_names))
     data = frame[["stock", "market"]].copy()
     for proxy in proxy_names:
-        transformed, _ = build_daily_change_frame({proxy: macro_series[proxy]}, {proxy: _macro_method(proxy)})
+        usable = _quality_checked_macro(proxy, macro_series[proxy])
+        if usable.empty:
+            continue
+        transformed, _ = build_daily_change_frame({proxy: usable}, {proxy: _macro_method(proxy)})
         data[proxy] = transformed[proxy]
+    proxy_names = [proxy for proxy in proxy_names if proxy in data]
     data = data.dropna().tail(MARKET_BETA_WINDOW)
     if len(data) < 120 or not proxy_names:
         return {**unavailable, "observations": len(data)}
@@ -490,6 +522,21 @@ def _primary_regression(
         "adjusted_r2_improvement": driver_fit["adjusted_r2"] - market_fit["adjusted_r2"],
         "coefficients": {name: driver_fit["coefficients"].get(name) for name in proxy_names},
     }
+
+
+def _quality_checked_macro(name: str, series: pd.Series) -> pd.Series:
+    """Apply scale-break inspection only to price-level macro inputs."""
+    clean = pd.to_numeric(series, errors="coerce").dropna().sort_index()
+    if _macro_method(name) != "return":
+        return clean
+    quality = inspect_price_series(clean)
+    return quality.series if quality.usable else pd.Series(dtype=float)
+
+
+def macro_information_timing(name: str) -> str:
+    if name in {"SOX指数", "NASDAQ総合指数", "S&P 500指数", "WTI原油先物", "VIX指数", "UST 10Y"}:
+        return "same_date_ex_post_not_japan_decision_time"
+    return "same_date_observation"
 
 
 def classify_macro_explainability(
@@ -567,6 +614,42 @@ def _period_returns(series: pd.Series) -> dict[str, float | None]:
         "return_6m": _calendar_return(clean, months=6),
         "return_1y": _calendar_return(clean, months=12),
     }
+
+
+def _aligned_relative_return(stock: pd.Series, market: pd.Series, *, months: int) -> tuple[float | None, pd.Timestamp | None, pd.Timestamp | None]:
+    """Return stock-minus-market over exactly the same common endpoints."""
+    pair = pd.concat({"stock": stock, "market": market}, axis=1, sort=False).dropna().sort_index()
+    if pair.empty:
+        return None, None, None
+    end = pair.index[-1]
+    starts = pair.loc[pair.index <= end - pd.DateOffset(months=months)]
+    if starts.empty:
+        return None, None, None
+    start = starts.index[-1]
+    if float(pair.loc[start, "stock"]) == 0 or float(pair.loc[start, "market"]) == 0:
+        return None, None, None
+    stock_return = (float(pair.loc[end, "stock"]) / float(pair.loc[start, "stock"]) - 1) * 100
+    market_return = (float(pair.loc[end, "market"]) / float(pair.loc[start, "market"]) - 1) * 100
+    return float(stock_return - market_return), pd.Timestamp(start), pd.Timestamp(end)
+
+
+def _market_map_status(
+    stock: pd.Series,
+    market: pd.Series,
+    quality: PriceQualityResult,
+    returns: dict[str, float | None],
+) -> str:
+    if quality.status == "blocked":
+        return "Quality Blocked"
+    if stock.empty:
+        return "Unavailable"
+    if not market.empty and stock.index[-1] < market.index[-1]:
+        newer_market_observations = int((market.index > stock.index[-1]).sum())
+        if newer_market_observations > 5:
+            return "Stale"
+    if returns.get("return_3m") is None:
+        return "History Limited"
+    return "Available"
 
 
 def _positional_return(series: pd.Series, periods: int) -> float | None:
