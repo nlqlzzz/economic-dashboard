@@ -14,8 +14,9 @@ from theme_view import (
 
 
 class ThemeViewTest(unittest.TestCase):
-    def test_defines_five_investment_themes(self):
-        self.assertEqual(list(THEME_DEFINITIONS), ["半導体", "米国株", "日本株", "円", "Gold"])
+    def test_defines_non_japan_investment_themes(self):
+        self.assertEqual(list(THEME_DEFINITIONS), ["半導体", "米国株", "円", "Gold"])
+        self.assertNotIn("日本株", THEME_DEFINITIONS)
         for theme in THEME_DEFINITIONS.values():
             self.assertGreaterEqual(len(theme["indicators"]), 5)
             self.assertEqual(len(theme["correlation_pair"]), 2)

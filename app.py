@@ -326,6 +326,15 @@ KEY_MARKET_INDICATORS = {
     "JGB 10Y",
 }
 
+
+def current_alert_thresholds() -> dict[str, float]:
+    """Return shared alert settings without depending on another page rendering first."""
+    return {
+        "直前観測値比": float(st.session_state.get("alert_previous_threshold", 2.0)),
+        "1週間": float(st.session_state.get("alert_week_threshold", 5.0)),
+        "1か月": float(st.session_state.get("alert_month_threshold", 10.0)),
+    }
+
 with st.sidebar:
     st.header("表示設定")
     if main_view == "日本株":
@@ -1786,9 +1795,6 @@ if main_view == "投資テーマ":
             elif quality.status == "blocked":
                 st.warning(f"{name}: {quality.reason}")
 
-        if selected_theme_name == "日本株":
-            st.info("Core20の銘柄一覧と個別分析は、上部の「日本株」画面へ統合しました。")
-
         if selected_theme_name == "半導体":
             semiconductor_iip = pd.DataFrame()
             machinery_orders = pd.Series(dtype=float)
@@ -2334,7 +2340,9 @@ if main_view == "投資テーマ":
                 for name, series in theme_series.items()
                 if INDICATORS[name]["category"] != "金利"
             }
-            theme_move_alerts = detect_market_moves(price_theme_series, alert_thresholds)
+            theme_move_alerts = detect_market_moves(
+                price_theme_series, current_alert_thresholds()
+            )
             if theme_move_alerts.empty:
                 st.caption("設定中の急変検知基準を超えるテーマ指標はありません。")
             else:
