@@ -12,6 +12,10 @@ from fundamentals import (build_annual_forecast_series, build_fundamentals_cards
 from jquants_loader import JQuantsConfigurationError, fetch_financial_summaries, normalize_financial_summaries
 
 
+JAPAN_SELECTED_TICKER_KEY = "japan_selected_ticker"
+JAPAN_STOCK_SECTION_ORDER = ("業績", "評価水準", "価格の反応", "リスク・確認事項", "補助分析")
+
+
 def render_japan_core_equity(
     market_map: pd.DataFrame,
     sector_summary: pd.DataFrame,
@@ -23,27 +27,57 @@ def render_japan_core_equity(
     macro_series: dict[str, pd.Series] | None = None,
     topix_quality: object | None = None,
 ) -> None:
-    st.markdown("### Japan Core 20")
+    st.markdown("## 日本株分析")
     st.caption(
-        "日本の主要大型株20社について、絶対リターン、TOPIX連動ETF比、"
-        "直近のマクロ相関を確認します。価格はYahoo Financeのauto_adjust=Trueによる調整後終値です。"
-        "売買判断や業種指数ではありません。"
+        "Core20から銘柄を一つ選び、業績 → 評価水準 → 価格の反応 → リスクの順に確認します。"
+        "市場・マクロ・残差・同業比較は補助分析としてまとめています。"
     )
-    if market_map.empty or not market_map["status"].eq("Available").any():
-        st.warning("品質・鮮度・履歴条件を満たすCore 20価格がないため、日本株分析を表示できません。")
-        return
-
-    _render_snapshot(market_map)
-    _render_market_map(market_map)
-    _render_aggregates(sector_summary, theme_summary)
-    _render_macro_sensitivity(market_map, sensitivity)
-    _render_stock_detail(market_map, sensitivity, prices, macro_series, topix_quality)
+    ticker = _render_stock_selector()
+    detail_tab, list_tab = st.tabs(["銘柄分析", "Core20一覧"])
+    with detail_tab:
+        _render_stock_detail(
+            ticker, market_map, sensitivity, prices, macro_series, topix_quality
+        )
+    with list_tab:
+        st.caption("一覧は銘柄選びと市場内比較のための補助表示です。個別分析の銘柄は上の選択欄で変更します。")
+        if market_map.empty:
+            st.info("Core20の価格一覧は取得できません。個別銘柄の決算情報は銘柄分析で確認できます。")
+        else:
+            _render_snapshot(market_map)
+            _render_market_map(market_map)
+            _render_aggregates(sector_summary, theme_summary)
 
     failures = [*(stock_failures or []), *(macro_failures or [])]
     if failures:
         with st.expander("取得できなかった系列を見る"):
             for failure in failures:
                 st.warning(failure)
+
+
+def core20_stock_options() -> list[dict[str, str]]:
+    """Return stable selector options, including stocks whose price is unavailable."""
+    return [
+        {
+            "ticker": str(stock["ticker"]),
+            "label": f"{stock['name']}（{stock['code']}）",
+        }
+        for stock in CORE_20
+    ]
+
+
+def _render_stock_selector() -> str:
+    options = core20_stock_options()
+    tickers = [option["ticker"] for option in options]
+    labels = {option["ticker"]: option["label"] for option in options}
+    if st.session_state.get(JAPAN_SELECTED_TICKER_KEY) not in tickers:
+        st.session_state[JAPAN_SELECTED_TICKER_KEY] = tickers[0]
+    return st.selectbox(
+        "分析する銘柄",
+        tickers,
+        format_func=lambda value: labels[value],
+        key=JAPAN_SELECTED_TICKER_KEY,
+        help="この選択は業績・価格・リスク・補助分析で共通です。画面を移動しても維持されます。",
+    )
 
 
 def _render_snapshot(market_map: pd.DataFrame) -> None:
@@ -113,17 +147,13 @@ def _render_aggregates(sector_summary: pd.DataFrame, theme_summary: pd.DataFrame
         st.dataframe(_format_aggregate(theme_summary, "theme", "テーマ"), hide_index=True, width="stretch")
 
 
-def _render_macro_sensitivity(market_map: pd.DataFrame, sensitivity: dict[str, pd.DataFrame]) -> None:
+def _render_macro_sensitivity(ticker: str, sensitivity: dict[str, pd.DataFrame]) -> None:
     st.markdown("#### Macro Sensitivity")
     st.caption(
         "Market Exposureと、市場共通要因を除いたPrimary Driverとの同時点の関係を分けて確認します。"
         "米国市場と日本株の同日終値は、日本市場の判断時点では利用できない事後的な連動性です。"
         "先行性・因果関係・予測力・売買成績を示すものではありません。"
     )
-    available = market_map[market_map["status"].eq("Available")]
-    options = {f"{row['name']}（{row['code']}）": row["ticker"] for _, row in available.iterrows()}
-    label = st.selectbox("確認する銘柄", list(options), key="japan_core_sensitivity_stock")
-    ticker = options[label]
     stock = next(item for item in CORE_20 if item["ticker"] == ticker)
     expected = expected_proxy_names(stock)
     exposure = _selected_row(sensitivity.get("market_exposure", pd.DataFrame()), ticker)
@@ -232,47 +262,194 @@ def _selected_row(frame: pd.DataFrame, ticker: str) -> dict[str, object] | None:
 
 
 def _render_stock_detail(
+    ticker: str,
     market_map: pd.DataFrame,
     sensitivity: dict[str, pd.DataFrame],
     prices: pd.DataFrame | None,
     macro_series: dict[str, pd.Series] | None,
     topix_quality: object | None,
 ) -> None:
-    st.markdown("#### Stock Detail")
-    st.caption("市場 → Primary Driver → Core20 Anchor → 説明しにくい個別的な動きの順に、1銘柄を深掘りします。")
-    if prices is None or macro_series is None or topix_quality is None:
-        st.info("Stock Detailに必要な価格・マクロデータを取得できません。")
-        return
-    available = market_map[market_map["status"].eq("Available")]
-    options = {f"{row['name']}（{row['code']}）": row["ticker"] for _, row in available.iterrows()}
-    if not options:
-        return
-    label = st.selectbox("詳細を確認する銘柄", list(options), key="japan_core_stock_detail")
-    ticker = options[label]
     stock = next(item for item in CORE_20 if item["ticker"] == ticker)
+    price_frame = prices if prices is not None else pd.DataFrame()
+    selected_prices = (
+        price_frame[ticker] if ticker in price_frame else pd.Series(dtype=float)
+    )
+    effective_topix_quality = topix_quality or inspect_price_series(pd.Series(dtype=float))
     detail = build_stock_detail_analysis(
         stock,
-        prices[ticker],
-        topix_quality,
-        macro_series,
+        selected_prices,
+        effective_topix_quality,
+        macro_series or {},
         CORE_20,
-        prices,
+        price_frame,
         shared_macro_analysis=sensitivity,
         fundamentals=_load_fundamentals(str(stock["code"]), str(stock["ticker"]), str(stock["name"]), str(stock["sector"])),
     )
-    st.divider()
-    _render_stock_snapshot(detail)
-    _render_stock_performance(detail)
-    st.divider()
-    _render_stock_market_exposure(detail)
-    _render_stock_drivers(detail)
-    st.divider()
-    _render_stock_anchors(detail)
+    market_row = _selected_row(market_map, ticker)
+    _render_stock_header(detail, market_row, selected_prices)
+
     st.divider()
     _render_fundamentals(detail)
+
     st.divider()
-    _render_stock_specific_move(detail)
-    _render_stock_diagnostics(detail)
+    _render_valuation()
+
+    st.divider()
+    _render_price_reaction(detail)
+
+    st.divider()
+    _render_risks(detail, market_row)
+
+    st.divider()
+    st.markdown("#### 補助分析")
+    st.caption("市場感応度・マクロ要因・市場調整後リターン・Core20内の比較を、必要なときに確認します。")
+    with st.expander("補助分析を見る", expanded=False):
+        _render_stock_market_exposure(detail)
+        _render_stock_drivers(detail)
+        _render_stock_anchors(detail)
+        _render_stock_specific_move(detail)
+        _render_stock_diagnostics(detail, inline=True)
+
+
+def _render_stock_header(
+    detail: dict[str, object],
+    market_row: dict[str, object] | None,
+    prices: pd.Series,
+) -> None:
+    stock = detail["stock"]
+    clean_prices = pd.to_numeric(prices, errors="coerce").dropna().sort_index()
+    price_date = clean_prices.index[-1].strftime("%Y-%m-%d") if not clean_prices.empty else "—"
+    fundamentals = detail["fundamentals"]
+    latest = fundamentals.get("latest_period", {}) if fundamentals.get("status") == "Available" else {}
+    st.markdown(f"### {stock['name']}（{stock['code']}）")
+    st.caption(f"{stock['sector']} ｜ 価格基準日 {price_date} ｜ Yahoo Finance 調整後終値")
+    status_items = build_stock_status_items(detail, market_row)
+    st.markdown("　｜　".join(f"**{label}:** {value}" for label, value in status_items))
+    if latest:
+        st.caption(
+            f"最新決算 {latest.get('fiscal_year')} {latest.get('fiscal_quarter')} ｜ "
+            f"開示日 {latest.get('disclosure_date')}"
+        )
+
+
+def build_stock_status_items(
+    detail: dict[str, object], market_row: dict[str, object] | None
+) -> list[tuple[str, str]]:
+    fundamentals = detail.get("fundamentals", {})
+    price_status = str((market_row or {}).get("status") or "Unavailable")
+    return [
+        ("株価", _ui_state(price_status)),
+        ("決算", "利用可" if fundamentals.get("status") == "Available" else "利用不可"),
+        ("現在値", _price(detail.get("performance", {}).get("current"))),
+    ]
+
+
+def _render_valuation() -> None:
+    st.markdown("#### ② 評価水準")
+    st.info(
+        "評価水準は未評価です。対象期・株式数・株式分割の整合を確認できるPER/PBR等がないため、"
+        "株価上昇率やTOPIX比で割安・割高を代用しません。"
+    )
+
+
+def build_price_reaction_rows(detail: dict[str, object]) -> list[dict[str, str]]:
+    performance = detail.get("performance", {})
+    quality = detail.get("quality")
+    prices = quality.series if quality is not None and quality.usable else pd.Series(dtype=float)
+    rows: list[dict[str, str]] = []
+    for months, label in ((1, "1か月"), (3, "3か月"), (6, "6か月")):
+        absolute_start, absolute_end = _calendar_period_dates(prices, months)
+        rows.append({
+            "期間": label,
+            "絶対リターン": _percent(performance.get(f"return_{months}m")),
+            "TOPIX比": _point(performance.get(f"relative_{months}m")),
+            "絶対開始日": _date_text(absolute_start),
+            "絶対終了日": _date_text(absolute_end),
+            "相対開始日": _date_text(performance.get(f"relative_{months}m_start")),
+            "相対終了日": _date_text(performance.get(f"relative_{months}m_end")),
+        })
+    return rows
+
+
+def _render_price_reaction(detail: dict[str, object]) -> None:
+    st.markdown("#### ③ 価格の反応")
+    st.caption("絶対リターンとTOPIX連動ETF（1306）比を分けて表示します。業績との因果関係や織り込みを示すものではありません。")
+    quality = detail["quality"]
+    if not quality.usable:
+        st.warning(f"価格分析を表示できません：{quality.reason or '価格品質を確認できません。'}")
+        return
+    clean = pd.to_numeric(quality.series, errors="coerce").dropna().sort_index()
+    if not clean.empty:
+        chart = clean.loc[clean.index >= clean.index[-1] - pd.DateOffset(years=1)]
+        figure = go.Figure(go.Scatter(x=chart.index, y=chart, mode="lines", name="調整後終値"))
+        figure.update_layout(
+            height=260, margin={"l": 15, "r": 10, "t": 15, "b": 25},
+            yaxis_title="円", xaxis_title=None, showlegend=False,
+        )
+        st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+    rows = build_price_reaction_rows(detail)
+    for row in rows[:2]:
+        st.markdown(f"**{row['期間']}**　{row['絶対リターン']}　｜　TOPIX比 {row['TOPIX比']}")
+        st.caption(
+            f"絶対: {row['絶対開始日']} → {row['絶対終了日']} ｜ "
+            f"TOPIX比の共通期間: {row['相対開始日']} → {row['相対終了日']}"
+        )
+    with st.expander("6か月・短期騰落率を見る"):
+        row = rows[2]
+        st.markdown(f"**{row['期間']}**　{row['絶対リターン']}　｜　TOPIX比 {row['TOPIX比']}")
+        st.caption(
+            f"絶対: {row['絶対開始日']} → {row['絶対終了日']} ｜ "
+            f"TOPIX比の共通期間: {row['相対開始日']} → {row['相対終了日']}"
+        )
+        performance = detail["performance"]
+        st.write(f"1日 {_percent(performance.get('return_1d'))}　｜　5日 {_percent(performance.get('return_5d'))}　｜　1年 {_percent(performance.get('return_1y'))}")
+
+
+def build_risk_items(
+    detail: dict[str, object], market_row: dict[str, object] | None
+) -> dict[str, list[str]]:
+    data_limits: list[str] = []
+    investment_checks: list[str] = []
+    quality = detail.get("quality")
+    if quality is not None and quality.status != "ok":
+        data_limits.append(f"価格品質: {quality.reason or quality.status}")
+    market_status = str((market_row or {}).get("status") or "Unavailable")
+    if market_status != "Available":
+        data_limits.append(f"価格分析の状態: {_ui_state(market_status)}")
+    fundamentals = detail.get("fundamentals", {})
+    if fundamentals.get("status") != "Available":
+        data_limits.append("決算情報を取得できないため、業績リスクは未評価です。")
+    else:
+        momentum = str(fundamentals.get("momentum", "Unavailable"))
+        if momentum == "Weakening":
+            investment_checks.append("比較可能な最新決算では業績の弱含みが確認されています。")
+        elif momentum in {"Mixed", "Unavailable"}:
+            data_limits.append("業績の方向は混在または比較不能で、単一方向に評価できません。")
+        forecast = fundamentals.get("forecast")
+        if not isinstance(forecast, pd.DataFrame) or forecast.empty:
+            data_limits.append("比較可能な会社予想を取得できません。")
+    exposure = detail.get("market_exposure", {})
+    beta = exposure.get("market_beta_252d") if exposure.get("status") == "Available" else None
+    if beta is None:
+        data_limits.append("市場感応度は履歴または比較条件不足のため未評価です。")
+    elif float(beta) >= 1.8:
+        investment_checks.append("市場より値動きが大きい傾向が確認されています。")
+    if not investment_checks:
+        investment_checks.append("現在の取得データだけで低リスクとは判断できません。")
+    return {"data_limits": data_limits, "investment_checks": investment_checks}
+
+
+def _render_risks(detail: dict[str, object], market_row: dict[str, object] | None) -> None:
+    st.markdown("#### ④ リスク・確認事項")
+    items = build_risk_items(detail, market_row)
+    st.markdown("**投資判断上の確認事項**")
+    for item in items["investment_checks"]:
+        st.write(f"・{item}")
+    if items["data_limits"]:
+        st.markdown("**データ上の制約**")
+        for item in items["data_limits"]:
+            st.write(f"・{item}")
+    st.caption("データ不足は低リスクを意味しません。表示は売買判断や株価予測ではありません。")
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
@@ -289,7 +466,7 @@ def _load_fundamentals(code: str, ticker: str, name: str, sector: str) -> dict[s
 
 def _render_fundamentals(detail: dict[str, object]) -> None:
     data = detail["fundamentals"]
-    st.markdown("##### 業績・ファンダメンタルズ")
+    st.markdown("#### ① 業績")
     st.caption("開示済みの実績と、期間が一致する通期会社予想を分けて確認します。")
     if data.get("status") != "Available":
         st.info("取得不可：" + str(data.get("reason", "業績データを取得できません。")))
@@ -305,8 +482,6 @@ def _render_fundamentals(detail: dict[str, object]) -> None:
                 st.caption(card["yoy"])
     latest = data["latest_period"]
     st.info(f"**業績モメンタム：{_ui_state(data['momentum'])}**\n\n{data.get('momentum_reason', '')}")
-    if detail.get("interpretation"):
-        st.caption(f"要約: {detail['interpretation']}")
     period_kind = "累計/FY開示" if latest.get("fiscal_quarter") in {"Q2", "Q3", "FY"} else "単独四半期"
     st.caption(f"対象期: {latest.get('fiscal_year')} {latest.get('fiscal_quarter')}（{period_kind}） ｜ 開示日: {latest.get('disclosure_date')} ｜ 出典: {data['source']}")
     tabs = st.tabs(["四半期推移", "会社予想", "詳細データ"])
@@ -473,20 +648,28 @@ def _render_stock_specific_move(detail: dict[str, object]) -> None:
     st.caption(detail["next_analysis"])
 
 
-def _render_stock_diagnostics(detail: dict[str, object]) -> None:
-    with st.expander("Detailed Diagnosticsを見る"):
-        st.caption("Observed / Ex post correlationsはデータ観測後の相関であり、因果関係や先行性を意味しません。")
-        observed = detail["observed_correlations"]
-        if not observed.empty:
-            display = observed.copy()
-            for source, label in (("correlation_120d", "120D"), ("correlation_60d", "60D"), ("correlation_20d", "20D")):
-                display[label] = display[source].map(_correlation)
-            st.dataframe(display[["macro", "120D", "60D", "20D", "observations"]].rename(columns={"macro": "系列", "observations": "共通観測数"}), hide_index=True, width="stretch")
-        regression = detail["regression"]
-        if regression.get("status") == "Available":
-            st.write(f"Adjusted R²: Market only {_number(regression.get('market_adjusted_r2'))} → Market + Drivers {_number(regression.get('driver_adjusted_r2'))}")
-            st.caption(f"改善 {_number(regression.get('adjusted_r2_improvement'))}｜観測数 {int(regression.get('observations', 0))}｜係数 {regression.get('coefficients', {})}")
-        st.caption("株価・指数・FX・商品は日次リターン、金利は日次変化幅。米国市場系列との取引時間差は補正していません。")
+def _render_stock_diagnostics(detail: dict[str, object], *, inline: bool = False) -> None:
+    if inline:
+        st.markdown("##### 観測後相関・回帰の詳細")
+        _render_stock_diagnostic_content(detail)
+        return
+    with st.expander("観測後相関・回帰の詳細を見る"):
+        _render_stock_diagnostic_content(detail)
+
+
+def _render_stock_diagnostic_content(detail: dict[str, object]) -> None:
+    st.caption("Observed / Ex post correlationsはデータ観測後の相関であり、因果関係や先行性を意味しません。")
+    observed = detail["observed_correlations"]
+    if not observed.empty:
+        display = observed.copy()
+        for source, label in (("correlation_120d", "120D"), ("correlation_60d", "60D"), ("correlation_20d", "20D")):
+            display[label] = display[source].map(_correlation)
+        st.dataframe(display[["macro", "120D", "60D", "20D", "observations"]].rename(columns={"macro": "系列", "observations": "共通観測数"}), hide_index=True, width="stretch")
+    regression = detail["regression"]
+    if regression.get("status") == "Available":
+        st.write(f"Adjusted R²: Market only {_number(regression.get('market_adjusted_r2'))} → Market + Drivers {_number(regression.get('driver_adjusted_r2'))}")
+        st.caption(f"改善 {_number(regression.get('adjusted_r2_improvement'))}｜観測数 {int(regression.get('observations', 0))}｜係数 {regression.get('coefficients', {})}")
+    st.caption("株価・指数・FX・商品は日次リターン、金利は日次変化幅。米国市場系列との取引時間差は補正していません。")
 
 
 def _format_aggregate(frame: pd.DataFrame, key: str, label: str) -> pd.DataFrame:
@@ -568,8 +751,28 @@ def _ui_state(value: object) -> str:
         "Strong": "強い", "Improving": "改善", "Mixed": "まちまち", "Weakening": "弱含み",
         "Unavailable": "利用不可", "Available": "利用可", "High": "高い", "Medium": "中程度",
         "Low": "低い", "Macro-unexplained": "マクロで説明しにくい", "Stable": "安定", "Unstable": "不安定",
+        "Quality Blocked": "品質上利用不可", "History Limited": "履歴不足", "Stale": "更新要確認",
     }
     return labels.get(str(value), str(value))
+
+
+def _date_text(value: object) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    return pd.Timestamp(value).strftime("%Y-%m-%d")
+
+
+def _calendar_period_dates(
+    series: pd.Series, months: int
+) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    clean = pd.to_numeric(series, errors="coerce").dropna().sort_index()
+    if clean.empty:
+        return None, None
+    end = pd.Timestamp(clean.index[-1])
+    candidates = clean.loc[clean.index <= end - pd.DateOffset(months=months)]
+    if candidates.empty:
+        return None, end
+    return pd.Timestamp(candidates.index[-1]), end
 
 
 def _missing(value: object) -> bool:
