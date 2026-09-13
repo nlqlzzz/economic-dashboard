@@ -50,13 +50,6 @@ THEME_DEFINITIONS = {
         "correlation_pair": ("NASDAQ総合指数", "UST 10Y"),
         "event_types": ["cpi", "employment", "fomc"],
     },
-    "日本株": {
-        "description": "日本株の動きを、為替と日米金利の両面から確認します。",
-        "indicators": ["日経平均株価", "TOPIX連動ETF（1306）", "USD/JPY", "JGB 10Y", "UST 10Y"],
-        "relative_pair": ("日経平均株価", "TOPIX連動ETF（1306）"),
-        "correlation_pair": ("日経平均株価", "USD/JPY"),
-        "event_types": ["cpi", "employment", "fomc"],
-    },
     "円": {
         "description": "円相場を、日米金利差と市場のリスク警戒度から確認します。",
         "indicators": ["USD/JPY", "EUR/JPY", "日米金利差 2Y（米国−日本）", "日米金利差 10Y（米国−日本）", "VIX指数"],
