@@ -136,6 +136,60 @@ def load_market_stress_context(start_date: str) -> dict[str, object]:
     }
 
 
+def render_primary_japan_page() -> None:
+    """Load only the shared inputs needed by the primary Japan-equity screen."""
+    core_start = (
+        pd.Timestamp.today().normalize() - pd.DateOffset(years=5, days=120)
+    ).date()
+    core_stock_failures: list[str] = []
+    core_macro_failures: list[str] = []
+    core_batch = pd.DataFrame()
+    try:
+        core_batch = load_yfinance_batch((*core_tickers(), "1306.T"), str(core_start))
+        for missing_ticker in core_batch.attrs.get("missing_tickers", []):
+            core_stock_failures.append(f"株価を取得できません: {missing_ticker}")
+    except Exception as error:
+        core_stock_failures.append(f"Core20株価を取得できません: {error}")
+
+    core_prices = core_batch.reindex(
+        columns=[ticker for ticker in core_tickers() if ticker in core_batch]
+    )
+    topix = core_batch["1306.T"] if "1306.T" in core_batch else pd.Series(dtype=float)
+    topix_quality = inspect_price_series(topix)
+    core_market_map = build_market_map(core_prices, topix)
+
+    core_macros: dict[str, pd.Series] = {}
+    for macro_name in MACRO_SERIES:
+        if macro_name == "TOPIX連動ETF（1306）" and not topix.empty:
+            core_macros[macro_name] = topix
+            continue
+        try:
+            core_macros[macro_name] = load_indicator_data(
+                INDICATORS[macro_name], str(core_start)
+            )
+        except Exception as error:
+            core_macro_failures.append(f"{macro_name}: {error}")
+    try:
+        core_sensitivity = build_macro_sensitivity_analysis(
+            core_prices, core_macros, topix_quality, core_market_map
+        )
+    except Exception as error:
+        core_macro_failures.append(f"補助分析を計算できません: {error}")
+        core_sensitivity = {}
+
+    render_japan_core_equity(
+        core_market_map,
+        aggregate_by_sector(core_market_map),
+        aggregate_by_theme(core_market_map),
+        core_sensitivity,
+        core_stock_failures,
+        core_macro_failures,
+        core_prices,
+        core_macros,
+        topix_quality,
+    )
+
+
 st.set_page_config(page_title="市場ダッシュボード", layout="wide")
 st.markdown(
     """
@@ -171,6 +225,10 @@ st.markdown(
             padding-left: 0.65rem;
             padding-right: 0.65rem;
         }
+        [data-testid="stRadio"] [role="radiogroup"] {
+            flex-wrap: wrap;
+            gap: 0.2rem 0.75rem;
+        }
     }
     </style>
     """,
@@ -178,6 +236,13 @@ st.markdown(
 )
 st.title("市場ダッシュボード")
 st.caption("FRED と Yahoo Finance の公開データを表示します。")
+main_view = st.radio(
+    "画面を選択",
+    ["日本株", "市場概況", "イベント", "分析", "投資テーマ"],
+    horizontal=True,
+    key="main_view",
+    label_visibility="collapsed",
+)
 
 DISPLAY_SETS: dict[str, set[str]] = {
     "半導体": {
@@ -263,6 +328,8 @@ KEY_MARKET_INDICATORS = {
 
 with st.sidebar:
     st.header("表示設定")
+    if main_view == "日本株":
+        st.caption("日本株の銘柄選択は主画面で行います。以下の設定は市場概況など他の画面で使用します。")
     today = pd.Timestamp.today().normalize()
     period_starts = {
         "年初来": date(today.year, 1, 1),
@@ -364,7 +431,7 @@ with st.sidebar:
                 )
                 st.success(f"「{new_watchlist_name}」をブラウザに保存しました。")
 
-if not selected_names:
+if main_view != "日本株" and not selected_names:
     st.info("左のメニューから、表示する指標を一つ以上選んでください。")
     st.stop()
 
@@ -372,38 +439,38 @@ normalize_values = st.session_state.get("normalize_values_v2", True)
 series_to_plot: dict[str, pd.Series] = {}
 errors: list[str] = []
 
-with st.spinner("データを取得しています…"):
-    for name in selected_names:
-        info = INDICATORS[name]
-        try:
-            series = load_indicator_data(info, str(start_date))
-            source_metadata = dict(series.attrs)
-            if info.get("yoy", False):
-                series = calc_yoy(series)
-            if normalize_values:
-                series = normalize(series)
-            series.attrs.update(source_metadata)
-            series_to_plot[name] = series
-            if series.attrs.get("is_fallback"):
-                errors.append(
-                    f"{name}: 一次データを取得できないため、"
-                    f"{series.attrs['fallback_label']}（{series.attrs['ticker']}）を表示しています。"
-                )
-        except Exception as error:
-            errors.append(f"{name}: {error}")
+if main_view != "日本株":
+    with st.spinner("データを取得しています…"):
+        for name in selected_names:
+            info = INDICATORS[name]
+            try:
+                series = load_indicator_data(info, str(start_date))
+                source_metadata = dict(series.attrs)
+                if info.get("yoy", False):
+                    series = calc_yoy(series)
+                if normalize_values:
+                    series = normalize(series)
+                series.attrs.update(source_metadata)
+                series_to_plot[name] = series
+                if series.attrs.get("is_fallback"):
+                    errors.append(
+                        f"{name}: 一次データを取得できないため、"
+                        f"{series.attrs['fallback_label']}（{series.attrs['ticker']}）を表示しています。"
+                    )
+            except Exception as error:
+                errors.append(f"{name}: {error}")
 
 for error in errors:
     st.warning(error)
 
-if not series_to_plot:
+if main_view != "日本株" and not series_to_plot:
     st.error("データを表示できませんでした。ネットワーク接続とティッカーを確認してください。")
     st.stop()
 
-market_tab, event_tab, analysis_tab, theme_tab = st.tabs(
-    ["市場概況", "イベント", "分析", "投資テーマ"]
-)
+if main_view == "日本株":
+    render_primary_japan_page()
 
-with market_tab:
+if main_view == "市場概況":
     graph_display_mode = st.radio(
         "グラフ表示",
         ["重ねて表示", "左右の軸", "個別グラフ"],
@@ -652,7 +719,7 @@ with market_tab:
         table = pd.concat(series_to_plot, axis=1)
         st.dataframe(table.sort_index(ascending=False), use_container_width=True)
 
-with event_tab:
+if main_view == "イベント":
     st.subheader("米国経済イベントカレンダー")
     calendar_months = st.radio(
         "表示期間",
@@ -790,7 +857,7 @@ with event_tab:
                     f"日程元: [{active_event_name}]({EVENT_SOURCE_URLS[active_event_name]})"
                 )
 
-with analysis_tab:
+if main_view == "分析":
     st.subheader("Market Stress Score")
     st.caption(
         "VIX、株価変動、株価下落、米10年金利変化、為替変動を過去5年分布と比較し、"
@@ -1684,7 +1751,7 @@ with analysis_tab:
     except Exception as error:
         st.warning(f"米国マクロ局面を判定できませんでした: {error}")
 
-with theme_tab:
+if main_view == "投資テーマ":
     st.subheader("投資テーマ別ビュー")
     st.caption(
         "既存の指標・急変検知・相関・マクロ局面・イベントを、投資テーマ単位でまとめ直します。"
@@ -1720,68 +1787,7 @@ with theme_tab:
                 st.warning(f"{name}: {quality.reason}")
 
         if selected_theme_name == "日本株":
-            core_start = (
-                pd.Timestamp.today().normalize() - pd.DateOffset(years=5, days=120)
-            ).date()
-            core_prices = pd.DataFrame()
-            core_market_map = pd.DataFrame()
-            core_stock_failures: list[str] = []
-            core_macro_failures: list[str] = []
-            try:
-                core_batch = load_yfinance_batch(
-                    (*core_tickers(), "1306.T"), str(core_start)
-                )
-                core_prices = core_batch.reindex(
-                    columns=[ticker for ticker in core_tickers() if ticker in core_batch]
-                )
-                topix = (
-                    core_batch["1306.T"]
-                    if "1306.T" in core_batch
-                    else pd.Series(dtype=float)
-                )
-                for missing_ticker in core_batch.attrs.get("missing_tickers", []):
-                    core_stock_failures.append(
-                        f"株価を取得できません: {missing_ticker}"
-                    )
-                topix_quality = inspect_price_series(topix)
-                core_market_map = build_market_map(core_prices, topix)
-
-                core_macros: dict[str, pd.Series] = {}
-                for macro_name in MACRO_SERIES:
-                    if macro_name == "TOPIX連動ETF（1306）" and not topix.empty:
-                        core_macros[macro_name] = topix
-                        continue
-                    if macro_name in theme_series:
-                        core_macros[macro_name] = theme_series[macro_name]
-                        continue
-                    try:
-                        core_macros[macro_name] = load_indicator_data(
-                            INDICATORS[macro_name], str(core_start)
-                        )
-                    except Exception as macro_error:
-                        core_macro_failures.append(f"{macro_name}: {macro_error}")
-                core_sensitivity = build_macro_sensitivity_analysis(
-                    core_prices,
-                    core_macros,
-                    topix_quality,
-                    core_market_map,
-                )
-                render_japan_core_equity(
-                    core_market_map,
-                    aggregate_by_sector(core_market_map),
-                    aggregate_by_theme(core_market_map),
-                    core_sensitivity,
-                    core_stock_failures,
-                    core_macro_failures,
-                    core_prices,
-                    core_macros,
-                    topix_quality,
-                )
-            except Exception as core_error:
-                st.warning(
-                    "Japan Core 20を表示できません。既存の日本株テーマは継続表示します: "
-                    f"{core_error}"
-                )
+            st.info("Core20の銘柄一覧と個別分析は、上部の「日本株」画面へ統合しました。")
 
         if selected_theme_name == "半導体":
             semiconductor_iip = pd.DataFrame()
