@@ -32,7 +32,7 @@ create table if not exists public.investment_decisions (
     constraint investment_decisions_source_check
         check (decision_source = 'Human'),
     constraint investment_decisions_reason_count_check
-        check (cardinality(reason_tags) <= 3),
+        check (cardinality(reason_tags) between 1 and 3),
     constraint investment_decisions_reason_values_check
         check (reason_tags <@ array[
             '業績', '会社予想', '評価水準', '株価・モメンタム', 'TOPIX比',

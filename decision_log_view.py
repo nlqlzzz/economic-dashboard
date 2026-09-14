@@ -12,6 +12,7 @@ import streamlit as st
 from decision_log import (
     DECISION_ACTIONS,
     DECISION_MODES,
+    DEFAULT_DECISION_MODE,
     HORIZON_LABELS,
     REASON_TAGS,
     TOKYO,
@@ -89,8 +90,13 @@ def render_decision_entry(
         first, second = st.columns(2)
         decision_action = first.selectbox("判断", DECISION_ACTIONS)
         horizon_label = second.selectbox("想定投資期間", list(HORIZON_LABELS.values()), index=1)
-        decision_mode = st.radio("判断モード", DECISION_MODES, horizontal=True)
-        reason_tags = st.multiselect("主な理由（最大3個）", REASON_TAGS, max_selections=3)
+        decision_mode = st.radio(
+            "判断モード",
+            DECISION_MODES,
+            index=DECISION_MODES.index(DEFAULT_DECISION_MODE),
+            horizontal=True,
+        )
+        reason_tags = st.multiselect("主な理由（必須・1〜3個）", REASON_TAGS, max_selections=3)
         comment = st.text_area("コメント（任意）", max_chars=300, height=80)
         review_condition = st.text_area("見直し・反証条件（任意）", max_chars=300, height=80)
         submitted = st.form_submit_button("この判断を記録", type="primary", use_container_width=True)
@@ -227,6 +233,14 @@ def _render_checkpoint(checkpoint: object) -> None:
             f"TOPIX比 {_point(data['excess_return'])}"
         )
         st.caption(f"共通評価日: {data['end_date']}｜判断方向との整合（参考）: {data['direction_alignment']}")
+        stock_change = data.get("stock_reference_change_pct")
+        benchmark_change = data.get("benchmark_reference_change_pct")
+        if _material_reference_change(stock_change) or _material_reference_change(benchmark_change):
+            st.caption(
+                "取得時点による調整後価格の差: "
+                f"個別株 {_point(stock_change)}｜TOPIX {_point(benchmark_change)}。"
+                "保存参考価格は監査用に維持し、リターンは現在系列内で計算しています。"
+            )
     else:
         st.caption(data["reason"])
 
@@ -273,3 +287,7 @@ def _point(value: object) -> str:
 
 def _evaluation_status(status: str) -> str:
     return {"pending": "評価待ち", "unavailable": "評価不能", "evaluated": "評価済み"}.get(status, status)
+
+
+def _material_reference_change(value: object) -> bool:
+    return value is not None and abs(float(value)) >= 0.1

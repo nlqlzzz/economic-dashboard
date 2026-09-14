@@ -6,6 +6,7 @@ from datetime import datetime
 import pandas as pd
 
 from decision_log import (
+    DEFAULT_DECISION_MODE,
     TOKYO,
     DecisionLogStorageError,
     DecisionValidationError,
@@ -90,9 +91,13 @@ class _Client:
 
 
 class DecisionLogTest(unittest.TestCase):
+    def test_default_mode_is_virtual_decision(self) -> None:
+        self.assertEqual(DEFAULT_DECISION_MODE, "仮想判断")
+
     def test_validates_action_horizon_mode_and_reason_limit(self) -> None:
         validate_decision_input("買う", 60, ["業績", "評価水準"], "実判断")
         for arguments in (
+            ("買う", 60, [], "実判断"),
             ("待つ", 60, [], "実判断"),
             ("買う", 30, [], "実判断"),
             ("買う", 60, [], "自動判断"),
@@ -192,12 +197,22 @@ class DecisionLogTest(unittest.TestCase):
         self.assertEqual(float(stock.loc[end]), 120.0)
         self.assertEqual(float(benchmark.loc[end]), 210.0)
 
-    def test_later_price_adjustment_does_not_rewrite_saved_reference(self) -> None:
+    def test_forward_return_uses_current_adjusted_series_for_both_prices(self) -> None:
+        stock, benchmark = _prices(40)
+        stock.loc[:] = stock * (98.0 / 100.0)
+        stock.iloc[20] = 110.0
+        result = evaluate_forward_checkpoint(_decision(), stock, benchmark, 20, as_of=stock.index[-1])
+        self.assertEqual(result.status, "evaluated")
+        self.assertAlmostEqual(result.stock_return, (110.0 / 98.0 - 1) * 100)
+        self.assertAlmostEqual(result.stock_reference_change_pct, -2.0)
+
+    def test_large_saved_reference_difference_is_diagnostic_not_a_block(self) -> None:
         stock, benchmark = _prices(40)
         stock.loc[:] = stock / 2
         result = evaluate_forward_checkpoint(_decision(), stock, benchmark, 20, as_of=stock.index[-1])
-        self.assertEqual(result.status, "unavailable")
-        self.assertIn("株式分割・調整・データ改定", result.reason)
+        self.assertEqual(result.status, "evaluated")
+        self.assertAlmostEqual(result.stock_return, 20.0)
+        self.assertAlmostEqual(result.stock_reference_change_pct, -50.0)
 
     def test_direction_alignment_reverses_for_sell_and_skip(self) -> None:
         self.assertEqual(direction_alignment("買う", 1.0), "整合")
@@ -240,6 +255,7 @@ class DecisionLogTest(unittest.TestCase):
         self.assertIn("revoke all on table public.investment_decisions from anon, authenticated", normalized)
         self.assertIn("revoke all on table public.investment_decisions from service_role", normalized)
         self.assertIn("grant select, insert on table public.investment_decisions to service_role", normalized)
+        self.assertIn("cardinality(reason_tags) between 1 and 3", normalized)
         self.assertNotIn("create policy", normalized)
         self.assertNotIn("grant update", normalized)
         self.assertNotIn("grant delete", normalized)

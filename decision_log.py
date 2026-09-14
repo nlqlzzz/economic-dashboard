@@ -21,6 +21,7 @@ SNAPSHOT_SCHEMA_VERSION = 1
 BENCHMARK_TICKER = "1306.T"
 DECISION_ACTIONS = ("買う", "見送る", "保有継続", "売却")
 DECISION_MODES = ("実判断", "仮想判断")
+DEFAULT_DECISION_MODE = "仮想判断"
 DECISION_SOURCE = "Human"
 HORIZON_LABELS = {20: "1か月", 60: "3か月", 120: "6か月"}
 REASON_TAGS = (
@@ -29,7 +30,6 @@ REASON_TAGS = (
 )
 MAX_REFERENCE_STALENESS_DAYS = 7
 MAX_OBSERVATION_GAP_DAYS = 7
-MAX_REFERENCE_RESTATEMENT_RATIO = 0.05
 
 
 class DecisionValidationError(ValueError):
@@ -69,6 +69,8 @@ class ForwardCheckpoint:
     excess_return: float | None
     direction_alignment: str | None
     reason: str
+    stock_reference_change_pct: float | None = None
+    benchmark_reference_change_pct: float | None = None
 
 
 def validate_decision_input(
@@ -83,8 +85,8 @@ def validate_decision_input(
         raise DecisionValidationError("想定投資期間が不正です。")
     if decision_mode not in DECISION_MODES:
         raise DecisionValidationError("判断モードが不正です。")
-    if len(reason_tags) > 3:
-        raise DecisionValidationError("主な理由は3個までです。")
+    if not 1 <= len(reason_tags) <= 3:
+        raise DecisionValidationError("主な理由は1〜3個選択してください。")
     if len(set(reason_tags)) != len(reason_tags) or any(tag not in REASON_TAGS for tag in reason_tags):
         raise DecisionValidationError("主な理由に不正な値があります。")
 
@@ -291,16 +293,8 @@ def evaluate_forward_checkpoint(
         return _checkpoint(trading_days, "unavailable", None, reason="現在の価格系列で判断時の共通基準日を確認できません。")
     current_stock_base = float(stock_quality.series.loc[reference_date])
     current_benchmark_base = float(benchmark_quality.series.loc[reference_date])
-    if (
-        abs(current_stock_base / stock_base - 1) > MAX_REFERENCE_RESTATEMENT_RATIO
-        or abs(current_benchmark_base / benchmark_base - 1) > MAX_REFERENCE_RESTATEMENT_RATIO
-    ):
-        return _checkpoint(
-            trading_days,
-            "unavailable",
-            None,
-            reason="判断後の株式分割・調整・データ改定の可能性があり、保存済み参考価格と現在系列を比較できません。",
-        )
+    stock_reference_change = (current_stock_base / stock_base - 1) * 100
+    benchmark_reference_change = (current_benchmark_base / benchmark_base - 1) * 100
     benchmark_after = benchmark_quality.series.loc[benchmark_quality.series.index > reference_date]
     if len(benchmark_after) < trading_days:
         if _series_is_stale(benchmark_quality.series, as_of):
@@ -317,8 +311,10 @@ def evaluate_forward_checkpoint(
         return _checkpoint(trading_days, "unavailable", target_date, reason="共通評価日の個別株価格がありません。後日の価格では代用しません。")
     stock_end = float(stock_quality.series.loc[target_date])
     benchmark_end = float(benchmark_quality.series.loc[target_date])
-    stock_return = (stock_end / stock_base - 1) * 100
-    benchmark_return = (benchmark_end / benchmark_base - 1) * 100
+    # Saved prices are an immutable audit snapshot. Forward returns must use the
+    # reference and end prices from the same currently retrieved adjusted series.
+    stock_return = (stock_end / current_stock_base - 1) * 100
+    benchmark_return = (benchmark_end / current_benchmark_base - 1) * 100
     excess = stock_return - benchmark_return
     alignment = direction_alignment(str(decision.get("decision_action")), excess)
     return _checkpoint(
@@ -330,6 +326,8 @@ def evaluate_forward_checkpoint(
         excess_return=excess,
         alignment=alignment,
         reason="判断時参考価格から同一評価日までの事後リターンです。",
+        stock_reference_change_pct=stock_reference_change,
+        benchmark_reference_change_pct=benchmark_reference_change,
     )
 
 
@@ -457,6 +455,8 @@ def _checkpoint(
     excess_return: float | None = None,
     alignment: str | None = None,
     reason: str,
+    stock_reference_change_pct: float | None = None,
+    benchmark_reference_change_pct: float | None = None,
 ) -> ForwardCheckpoint:
     return ForwardCheckpoint(
         trading_days,
@@ -468,6 +468,8 @@ def _checkpoint(
         excess_return,
         alignment,
         reason,
+        stock_reference_change_pct,
+        benchmark_reference_change_pct,
     )
 
 
