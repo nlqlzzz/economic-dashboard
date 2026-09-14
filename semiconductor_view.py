@@ -4,6 +4,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from chart_interaction import exploratory_chart_config
+
 from global_semiconductor_demand import (
     assess_regional_pulse,
     build_japan_pulse_inputs,
@@ -300,7 +302,7 @@ def _render_taiwan_orders(frame: pd.DataFrame) -> None:
             figure.add_trace(go.Scatter(x=group["reference_period"], y=group["yoy"], mode="lines", name=str(group.iloc[-1]["series_name"])))
         figure.add_hline(y=0, line_color="gray", line_width=1)
         figure.update_layout(height=340, margin=dict(l=20, r=20, t=20, b=40), yaxis_title="前年比（%）", xaxis_title="対象月", legend=dict(orientation="h", y=-0.25))
-        st.plotly_chart(figure, width="stretch")
+        st.plotly_chart(figure, width="stretch", config=exploratory_chart_config())
     latest = frame.sort_values("reference_period").iloc[-1]
     fetched = _format_timestamp(latest["fetched_at"])
     st.caption(f"対象月: {latest['reference_period']:%Y-%m}｜公表日: 公式履歴なし｜取得日時: {fetched}。前年比・移動平均・モメンタムは当アプリ計算値です。外銷訂單は台湾からの実輸出額ではなく、海外生産分を含み得る受注統計です。")

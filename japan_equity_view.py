@@ -4,6 +4,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from chart_interaction import exploratory_chart_config, make_chart_static
+
 from japan_equity import CORE_20, build_core_snapshot, expected_proxy_names, top_observed_correlations
 from stock_detail import build_stock_detail_analysis
 from fundamentals import (build_annual_forecast_series, build_fundamentals_cards,
@@ -406,7 +408,7 @@ def _render_price_reaction(detail: dict[str, object]) -> None:
             height=260, margin={"l": 15, "r": 10, "t": 15, "b": 25},
             yaxis_title="円", xaxis_title=None, showlegend=False,
         )
-        st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+        st.plotly_chart(figure, width="stretch", config=exploratory_chart_config())
     rows = build_price_reaction_rows(detail)
     for row in rows[:2]:
         st.markdown(f"**{row['期間']}**　{row['絶対リターン']}　｜　TOPIX比 {row['TOPIX比']}")
@@ -735,7 +737,7 @@ def _render_actual_chart(series: pd.DataFrame, metric: str) -> None:
         hovertemplate="%{x}<br>実績: %{customdata}<extra></extra>",
     ))
     figure.update_layout(**_chart_layout(series["value"], metric, unit))
-    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+    st.plotly_chart(figure, width="stretch", config=make_chart_static(figure))
 
 
 def _render_annual_forecast_chart(series: pd.DataFrame, metric: str) -> None:
@@ -755,7 +757,7 @@ def _render_annual_forecast_chart(series: pd.DataFrame, metric: str) -> None:
             hovertemplate=f"%{{x}}<br>{name}: %{{customdata}}<extra></extra>",
         ))
     figure.update_layout(**_chart_layout(pd.concat([series["実績"], series["会社予想"]]), metric, unit))
-    st.plotly_chart(figure, width="stretch", config={"displayModeBar": False})
+    st.plotly_chart(figure, width="stretch", config=make_chart_static(figure))
 
 
 def _chart_layout(values: pd.Series, metric: str, unit: object = None) -> dict[str, object]:
