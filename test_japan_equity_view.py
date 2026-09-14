@@ -58,7 +58,7 @@ class JapanEquityViewTest(unittest.TestCase):
     def test_primary_flow_has_requested_order(self) -> None:
         self.assertEqual(
             JAPAN_STOCK_SECTION_ORDER,
-            ("業績", "評価水準", "価格の反応", "リスク・確認事項", "補助分析"),
+            ("業績", "評価水準", "価格の反応", "リスク・確認事項", "判断を記録", "補助分析"),
         )
 
     def test_one_stable_selector_contains_all_core20_stocks(self) -> None:
@@ -133,6 +133,9 @@ view.render_japan_core_equity(
 """
         app = AppTest.from_string(script, default_timeout=30).run()
         self.assertFalse(app.exception)
+        self.assertEqual([tab.label for tab in app.tabs[:3]], ["銘柄分析", "判断履歴", "Core20一覧"])
+        self.assertTrue(any("Decision Logは未設定" in item.value for item in app.info))
+        self.assertFalse(any(button.label in {"編集", "削除"} for button in app.button))
         selector = next(widget for widget in app.selectbox if widget.label == "分析する銘柄")
         selector.set_value("8306.T").run()
         self.assertFalse(app.exception)
