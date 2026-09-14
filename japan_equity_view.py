@@ -10,10 +10,13 @@ from fundamentals import (build_annual_forecast_series, build_fundamentals_cards
     build_fundamentals_summary, chart_axis_ticks, format_eps, format_financial_value,
     format_jpy, format_yoy)
 from jquants_loader import JQuantsConfigurationError, fetch_financial_summaries, normalize_financial_summaries
+from decision_log_view import render_decision_entry, render_decision_history
 
 
 JAPAN_SELECTED_TICKER_KEY = "japan_selected_ticker"
-JAPAN_STOCK_SECTION_ORDER = ("業績", "評価水準", "価格の反応", "リスク・確認事項", "補助分析")
+JAPAN_STOCK_SECTION_ORDER = (
+    "業績", "評価水準", "価格の反応", "リスク・確認事項", "判断を記録", "補助分析"
+)
 
 
 def render_japan_core_equity(
@@ -26,6 +29,7 @@ def render_japan_core_equity(
     prices: pd.DataFrame | None = None,
     macro_series: dict[str, pd.Series] | None = None,
     topix_quality: object | None = None,
+    benchmark_prices: pd.Series | None = None,
 ) -> None:
     st.markdown("## 日本株分析")
     st.caption(
@@ -33,10 +37,17 @@ def render_japan_core_equity(
         "市場・マクロ・残差・同業比較は補助分析としてまとめています。"
     )
     ticker = _render_stock_selector()
-    detail_tab, list_tab = st.tabs(["銘柄分析", "Core20一覧"])
+    detail_tab, history_tab, list_tab = st.tabs(["銘柄分析", "判断履歴", "Core20一覧"])
     with detail_tab:
         _render_stock_detail(
-            ticker, market_map, sensitivity, prices, macro_series, topix_quality
+            ticker, market_map, sensitivity, prices, macro_series, topix_quality,
+            benchmark_prices,
+        )
+    with history_tab:
+        render_decision_history(
+            ticker,
+            prices if prices is not None else pd.DataFrame(),
+            benchmark_prices if benchmark_prices is not None else pd.Series(dtype=float),
         )
     with list_tab:
         st.caption("一覧は銘柄選びと市場内比較のための補助表示です。個別分析の銘柄は上の選択欄で変更します。")
@@ -268,6 +279,7 @@ def _render_stock_detail(
     prices: pd.DataFrame | None,
     macro_series: dict[str, pd.Series] | None,
     topix_quality: object | None,
+    benchmark_prices: pd.Series | None,
 ) -> None:
     stock = next(item for item in CORE_20 if item["ticker"] == ticker)
     price_frame = prices if prices is not None else pd.DataFrame()
@@ -298,7 +310,15 @@ def _render_stock_detail(
     _render_price_reaction(detail)
 
     st.divider()
-    _render_risks(detail, market_row)
+    risk_items = _render_risks(detail, market_row)
+
+    st.divider()
+    render_decision_entry(
+        detail,
+        selected_prices,
+        benchmark_prices if benchmark_prices is not None else pd.Series(dtype=float),
+        risk_items,
+    )
 
     st.divider()
     st.markdown("#### 補助分析")
@@ -439,7 +459,9 @@ def build_risk_items(
     return {"data_limits": data_limits, "investment_checks": investment_checks}
 
 
-def _render_risks(detail: dict[str, object], market_row: dict[str, object] | None) -> None:
+def _render_risks(
+    detail: dict[str, object], market_row: dict[str, object] | None
+) -> dict[str, list[str]]:
     st.markdown("#### ④ リスク・確認事項")
     items = build_risk_items(detail, market_row)
     st.markdown("**投資判断上の確認事項**")
@@ -450,6 +472,7 @@ def _render_risks(detail: dict[str, object], market_row: dict[str, object] | Non
         for item in items["data_limits"]:
             st.write(f"・{item}")
     st.caption("データ不足は低リスクを意味しません。表示は売買判断や株価予測ではありません。")
+    return items
 
 
 @st.cache_data(ttl=21600, show_spinner=False)

@@ -187,6 +187,7 @@ def render_primary_japan_page() -> None:
         core_prices,
         core_macros,
         topix_quality,
+        topix,
     )
 
 

@@ -69,13 +69,17 @@
 
 A. 決算比較、B. 価格品質・時点・期間整合、C. 日本株主画面への統合は完了済みとして[`docs/COMPLETED_ROADMAP.md`](docs/COMPLETED_ROADMAP.md)へ移した。
 
-1. **評価水準に必要なデータと比較条件の整備**
+1. **Decision Log / Forward Validation（現在の最優先）**
+   - Core20の判断区分、根拠、想定期間、判断時点Snapshotを追記保存し、20・60・120営業日後に同一終点の個別株・TOPIXリターンを評価するMVPを運用する。
+   - Supabase設定後に実判断・仮想判断を蓄積し、未満了・価格品質・共通終点欠損の扱いが実データでも明確か確認する。
+   - 理由別勝率や統合スコアへ進む前に、Snapshot schemaと前向き評価の継続性を検証する。
+2. **評価水準に必要なデータと比較条件の整備**
    - 実績・予想の対象期、価格基準日、株式数、株式分割をそろえてPERを算出できる公式データ範囲を診断する。
    - BPS・自己資本の定義と対象期を確認できるまでPBRを表示しない。
    - 株価上昇率やTOPIX比を割安・割高の代用にせず、比較可能な同業・自社履歴がない倍率は単独で評価しない。
 
 Corporate Events Lite、TDnet Full、Event Study、General Newsは、A〜Cの主導線を安定化した後に別途優先順位を判断する。TDnetで不足する詳細Fundamentalsが必要な場合だけ、EDINET APIのXBRLを候補として調査する。
-2. Arbitrary Japanese Stock Analysis（将来）
+3. Arbitrary Japanese Stock Analysis（将来）
    - 任意Ticker入力と、Core20 Anchorを参照した市場・Macro・相対行動の比較を追加する。
 
 共通原則:
