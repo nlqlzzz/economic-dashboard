@@ -8,6 +8,8 @@ import streamlit as st
 from plotly.subplots import make_subplots
 from streamlit_local_storage import LocalStorage
 
+from chart_interaction import exploratory_chart_config, make_chart_static
+
 from data_loader import (
     load_data,
     load_electronic_computer_orders,
@@ -535,7 +537,7 @@ if main_view == "市場概況":
                 margin=dict(l=20, r=20, t=45, b=35),
             )
             individual_figure.update_yaxes(title=chart_axis_title(name))
-            st.plotly_chart(individual_figure, use_container_width=True)
+            st.plotly_chart(individual_figure, use_container_width=True, config=exploratory_chart_config())
     else:
         if graph_display_mode == "左右の軸":
             figure = make_subplots(specs=[[{"secondary_y": True}]])
@@ -572,7 +574,7 @@ if main_view == "市場概況":
             )
         else:
             figure.update_yaxes(title="100基準" if normalize_values else "値")
-        st.plotly_chart(figure, use_container_width=True)
+        st.plotly_chart(figure, use_container_width=True, config=exploratory_chart_config())
     st.checkbox("100を基準に比較する", value=True, key="normalize_values_v2")
 
     latest_values_note = (
@@ -1054,7 +1056,7 @@ if main_view == "分析":
                 yaxis=dict(title="相関係数", range=[-1.05, 1.05]),
                 xaxis_title="日付",
             )
-            st.plotly_chart(change_figure, use_container_width=True)
+            st.plotly_chart(change_figure, use_container_width=True, config=exploratory_chart_config())
             st.caption(
                 f"{change_left_name}（{daily_change_labels[change_left_name]}）× "
                 f"{change_right_name}（{daily_change_labels[change_right_name]}）｜"
@@ -1176,7 +1178,7 @@ if main_view == "分析":
                     )
                 )
                 heatmap.update_layout(height=450, margin=dict(l=20, r=20, t=20, b=100))
-                st.plotly_chart(heatmap, use_container_width=True)
+                st.plotly_chart(heatmap, use_container_width=True, config=make_chart_static(heatmap))
 
                 st.markdown("##### 2指標の散布図")
                 scatter_left, scatter_right = st.columns(2)
@@ -1226,7 +1228,7 @@ if main_view == "分析":
                     xaxis_title=f"{scatter_x_name}（{correlation_labels[scatter_x_name]}）",
                     yaxis_title=f"{scatter_y_name}（{correlation_labels[scatter_y_name]}）",
                 )
-                st.plotly_chart(scatter_figure, use_container_width=True)
+                st.plotly_chart(scatter_figure, use_container_width=True, config=exploratory_chart_config())
                 if regression is None:
                     st.caption("回帰線と相関係数を計算できる有効なデータが不足しています。")
                 else:
@@ -1274,7 +1276,7 @@ if main_view == "分析":
                         yaxis=dict(title="相関係数", range=[-1.05, 1.05]),
                         xaxis_title="日付",
                     )
-                    st.plotly_chart(rolling_figure, use_container_width=True)
+                    st.plotly_chart(rolling_figure, use_container_width=True, config=exploratory_chart_config())
                     st.caption(
                         f"最新の{rolling_window_label}相関: {rolling_values.iloc[-1]:+.2f}｜"
                         f"{scatter_x_name} × {scatter_y_name}"
@@ -1468,7 +1470,11 @@ if main_view == "分析":
                 xaxis=dict(title="判定月", tickformat="%Y-%m"),
                 yaxis=dict(autorange="reversed"),
             )
-            st.plotly_chart(assessment_figure, use_container_width=True)
+            st.plotly_chart(
+                assessment_figure,
+                use_container_width=True,
+                config=make_chart_static(assessment_figure),
+            )
             st.caption(
                 "緑は改善・鈍化・緩和・順イールド、灰色は横ばい、"
                 "赤は悪化・上昇・引き締め・逆イールドです。各月時点の直近3か月変化で再判定します。"
@@ -1514,7 +1520,7 @@ if main_view == "分析":
                 hovermode="x unified",
                 margin=dict(l=20, r=20, t=45, b=35),
             )
-            st.plotly_chart(macro_trend_figure, use_container_width=True)
+            st.plotly_chart(macro_trend_figure, use_container_width=True, config=exploratory_chart_config())
             st.caption("表示期間は直近約3年です。判定には各指標の最新値と3か月変化を使います。")
         st.markdown("#### レジーム別リターン分析")
         st.caption(
@@ -1980,7 +1986,7 @@ if main_view == "投資テーマ":
                             zeroline=False,
                         ),
                     )
-                    st.plotly_chart(cycle_figure, width="stretch")
+                    st.plotly_chart(cycle_figure, width="stretch", config=make_chart_static(cycle_figure))
                     latest_cycle = inventory_cycle.iloc[-1]
                     st.caption(
                         f"最新の{latest_cycle['対象年月']:%Y-%m}は「{latest_cycle['局面候補']}」の"
@@ -2051,7 +2057,7 @@ if main_view == "投資テーマ":
                             hovermode="x unified",
                             legend=dict(orientation="h", y=-0.22),
                         )
-                        st.plotly_chart(iip_figure, width="stretch")
+                        st.plotly_chart(iip_figure, width="stretch", config=exploratory_chart_config())
 
                 source_url = semiconductor_iip.attrs["source_url"]
                 file_updated_at = semiconductor_iip.attrs.get("file_updated_at")
@@ -2157,7 +2163,11 @@ if main_view == "投資テーマ":
                                 hovermode="x unified",
                                 legend=dict(orientation="h", y=-0.22),
                             )
-                            st.plotly_chart(machinery_figure, width="stretch")
+                            st.plotly_chart(
+                                machinery_figure,
+                                width="stretch",
+                                config=exploratory_chart_config(),
+                            )
                     source_url = machinery_orders.attrs["source_url"]
                     released_at = machinery_orders.attrs.get("released_at")
                     release_text = (
@@ -2401,7 +2411,7 @@ if main_view == "投資テーマ":
                         yaxis_title="取得開始日=100",
                         xaxis_title="日付",
                     )
-                    st.plotly_chart(relative_figure, use_container_width=True)
+                    st.plotly_chart(relative_figure, use_container_width=True, config=exploratory_chart_config())
                     relative_direction = (
                         "優位"
                         if relative_month_change is not None and relative_month_change > 0
