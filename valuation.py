@@ -12,8 +12,12 @@ from price_quality import inspect_price_series
 EPS_UNITS = {"JPY", "JPY/share", "yen/share"}
 FINANCIAL_SECTORS = {"銀行", "保険"}
 REVISION_IDENTITY = (
-    "ticker", "fiscal_year", "accounting_standard", "consolidated_flag", "currency", "unit"
+    "ticker", "fiscal_year", "reference_period", "accounting_standard",
+    "consolidated_flag", "currency", "unit"
 )
+COMPARABLE_REVISION_DIRECTIONS = {
+    "up", "down", "unchanged", "turned_positive", "turned_non_positive"
+}
 
 
 @dataclass(frozen=True)
@@ -92,7 +96,7 @@ def assess_current_forward_per(
         blockers.append("単位または通貨不整合")
     if not common["accounting_standard"] or common["consolidated_flag"] is None:
         blockers.append("会計基準または連結区分不明")
-    if split_basis_status != "aligned":
+    if split_basis_status != "basis_verified":
         blockers.append("価格とEPSのper-share basis未確認")
     calculable = not blockers
     return ForwardPERAssessment(
@@ -112,11 +116,17 @@ def assess_current_forward_per(
     )
 
 
-def build_forecast_eps_revisions(records: pd.DataFrame) -> pd.DataFrame:
+def build_forecast_eps_revisions(
+    records: pd.DataFrame,
+    *,
+    adjustment_bars: pd.DataFrame | None = None,
+    basis_directly_verified: bool = False,
+) -> pd.DataFrame:
     """Compare FEPS only inside an identical fiscal-year/definition cohort."""
     forecasts = _forecast_rows(records)
     columns = list(forecasts.columns) + [
-        "previous_forecast_eps", "change", "change_pct", "revision_direction"
+        "previous_forecast_eps", "change", "change_pct", "basis_status",
+        "revision_direction"
     ]
     if forecasts.empty:
         return pd.DataFrame(columns=columns)
@@ -126,22 +136,39 @@ def build_forecast_eps_revisions(records: pd.DataFrame) -> pd.DataFrame:
     work = work.drop_duplicates([*REVISION_IDENTITY, "_disclosure"], keep="last")
     rows: list[dict[str, object]] = []
     for _, group in work.groupby(list(REVISION_IDENTITY), dropna=False, sort=False):
+        cohort_valid = all(
+            _text(group.iloc[0].get(field)) is not None
+            for field in ("ticker", "fiscal_year", "reference_period", "accounting_standard", "currency", "unit")
+        ) and not pd.isna(group.iloc[0].get("consolidated_flag"))
         previous: float | None = None
+        previous_disclosure: object | None = None
         for _, row in group.sort_values("_disclosure").iterrows():
             current = _number(row.get("value"))
             change = current - previous if current is not None and previous is not None else None
             change_pct = (change / previous * 100) if change is not None and previous > 0 else None
+            basis_status = _revision_basis_status(
+                adjustment_bars, previous_disclosure, row.get("disclosure_date"),
+                basis_directly_verified,
+            )
             direction = _revision_direction(previous, current)
+            if previous is not None and basis_status == "basis_changed":
+                direction = "basis_changed"
+                change_pct = None
+            elif previous is not None and basis_status != "basis_verified":
+                direction = "basis_unverified"
+                change_pct = None
             payload = row.drop(labels=["_disclosure"]).to_dict()
             rows.append({
                 **payload,
                 "previous_forecast_eps": previous,
                 "change": change,
                 "change_pct": change_pct,
+                "basis_status": basis_status,
                 "revision_direction": direction,
             })
-            if current is not None:
+            if current is not None and cohort_valid:
                 previous = current
+                previous_disclosure = row.get("disclosure_date")
     return pd.DataFrame(rows, columns=columns).sort_values(
         ["ticker", "disclosure_date"], na_position="last"
     ).reset_index(drop=True)
@@ -155,6 +182,9 @@ def forecast_available_on(records: pd.DataFrame, price_date: object) -> Mapping[
     cutoff = pd.Timestamp(price_date).tz_localize(None).normalize()
     disclosed = pd.to_datetime(forecasts["disclosure_date"], errors="coerce")
     eligible = forecasts[disclosed < cutoff].copy()
+    eligible = eligible[
+        eligible.apply(lambda row: _valid_forecast_for_price(row, cutoff), axis=1)
+    ]
     if eligible.empty:
         return None
     eligible["_disclosure"] = pd.to_datetime(eligible["disclosure_date"], errors="coerce")
@@ -173,7 +203,7 @@ def build_historical_forward_per(
         "forecast_disclosure_date", "accounting_standard", "consolidated_flag",
         "currency", "unit", "forward_per",
     ]
-    if split_basis_status != "aligned":
+    if split_basis_status != "basis_verified":
         return pd.DataFrame(columns=columns)
     quality = inspect_price_series(prices)
     if not quality.usable:
@@ -214,7 +244,7 @@ def historical_feasibility(records: pd.DataFrame, split_basis_status: str = "unk
                 int(group["fiscal_year"].dropna().nunique()),
             ))
         observations, years = max(candidates, default=(0, 0))
-    if split_basis_status != "aligned":
+    if split_basis_status != "basis_verified":
         status, reason = "NO-GO", "時系列のper-share basis未確認"
     elif observations >= 3 and years >= 2:
         status, reason = "GO", "複数年度・複数開示の履歴候補あり"
@@ -280,7 +310,44 @@ def split_basis_status_from_daily_bars(
         return "unknown"
     if ((window["factor"] - 1.0).abs() > 1e-12).any():
         return "corporate_action_detected"
-    return "aligned"
+    return "no_effective_action_detected"
+
+
+def _revision_basis_status(
+    bars: pd.DataFrame | None,
+    previous_disclosure: object | None,
+    current_disclosure: object,
+    directly_verified: bool,
+) -> str:
+    if previous_disclosure is None:
+        return "comparison_unavailable"
+    observed = split_basis_status_from_daily_bars(
+        bars if bars is not None else pd.DataFrame(),
+        previous_disclosure,
+        current_disclosure,
+    )
+    if observed == "corporate_action_detected":
+        return "basis_changed"
+    return "basis_verified" if directly_verified else "basis_unverified"
+
+
+def _valid_forecast_for_price(row: Mapping[str, object], price_date: pd.Timestamp) -> bool:
+    period_end = pd.to_datetime(row.get("reference_period"), errors="coerce")
+    fiscal_year = _text(row.get("fiscal_year"))
+    standard = _text(row.get("accounting_standard"))
+    currency = _text(row.get("currency"))
+    unit = _text(row.get("unit"))
+    consolidated = row.get("consolidated_flag")
+    return bool(
+        fiscal_year
+        and pd.notna(period_end)
+        and period_end >= price_date
+        and standard
+        and consolidated is not None
+        and not pd.isna(consolidated)
+        and currency == "JPY"
+        and unit in EPS_UNITS
+    )
 
 
 def assessment_dict(value: ForwardPERAssessment) -> dict[str, object]:

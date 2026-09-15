@@ -24,7 +24,7 @@ live実測状態: **Environment Blocked / JQUANTS_API_KEY unavailable**
 - 正規化済み`forecast_eps`はFiscal Year、Disclosure Date、Accounting Standard、Consolidated Flag、Currency、Unitを保持する。
 - インストール済み公式Clientの`FIN_SUMMARY_COLUMNS_V2`には`FEPS`、`BPS`、`NCBPS`、`Eq`、`NCEq`、`ShOutFY`、`AvgSh`が定義されている。ただし値のlive coverageは未確認であり、存在を取得済みと読み替えない。
 - 同Clientの日足列には`AdjFactor`、調整前OHLC、`AdjC`等がある。JPXもJ-Quants株価が分割等を考慮した調整済み・調整前価格を含むと説明している。しかし現在のアプリ価格はYahoo Finance `auto_adjust=True`であり、Summary FEPSと同じ1株basisかを示す共通識別子は現行正規化schemaにない。
-- 根拠のない分割係数推定は行わない。現在PERは`split_basis_status="aligned"`を明示的に確認できた場合だけ計算可能とする。
+- 根拠のない分割係数推定は行わない。`AdjFactor=1`から分かるのは、観測区間にeffectiveな調整イベントが検出されなかったことだけであり、`no_effective_action_detected`と記録する。会社予想が将来の分割を先に反映した可能性は排除できないため、Current PERはFEPSと価格basisを直接確認できる`basis_verified`の場合だけ計算可能とする。
 
 公式資料: [JPX J-Quants API](https://www.jpx.co.jp/markets/other-data-services/j-quants-api/)、[J-Quants公式Python Client](https://github.com/J-Quants/jquants-api-client-python)
 
@@ -44,18 +44,19 @@ live実測状態: **Environment Blocked / JQUANTS_API_KEY unavailable**
 
 ## Forecast EPS Revision
 
-`build_forecast_eps_revisions`はTicker、Fiscal Year、Accounting Standard、Consolidated Flag、Currency、Unitが同じcohort内だけをDisclosure Date順に比較する。
+`build_forecast_eps_revisions`はTicker、Fiscal Year、Reference Period、Accounting Standard、Consolidated Flag、Currency、Unitが同じcohort内だけをDisclosure Date順に比較する。
 
 - 前回値が正の場合だけ前回比%を計算する。
 - 赤字予想・ゼロ跨ぎは金額差と`turned_positive` / `turned_non_positive`を優先する。
 - Fiscal Yearが変わる行は新しい系列の初回観測であり、上方・下方修正にしない。
+- 2開示間に`AdjFactor`の変化があれば`basis_changed`とし、通常のup/downや修正率には数えない。変化が検出されなくても直接basisを確認できなければ`basis_unverified`とし、live coverageの比較可能ペアに数えない。
 - Financial SummaryだけではTDnet上の正式な修正開示か判別できないため、「会社予想更新」候補である。
 
 ## Historical Forward PER
 
-`forecast_available_on`は価格日より**前**に開示された最後のforecastだけを返す。開示時刻が確定していないため、開示当日終値には適用せず、次の価格観測日以降を候補にする。ある予想は同一定義の次回開示まで有効とするが、Fiscal Year切替は列として保持する。
+`forecast_available_on`は価格日より**前**に開示され、Reference Periodが価格日以降で、Fiscal Year、Reference Period、Accounting Standard、Consolidated Flag、Currency、Unitが有効な最後のforecastだけを返す。開示時刻が確定していないため、開示当日終値には適用しない。対象期終了後は、次年度予想がなくても古いforecastを使い続けない。
 
-現状はper-share basisが`aligned`と確認できない限り履歴を生成しない。future disclosureを過去価格へ遡及適用せず、分割係数も推測しない。
+現状はper-share basisが直接`basis_verified`と確認できない限り履歴を生成しない。`no_effective_action_detected`だけでは生成せず、future disclosureを過去価格へ遡及適用せず、分割係数も推測しない。
 
 ## Core20 live診断表
 

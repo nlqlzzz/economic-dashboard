@@ -75,7 +75,8 @@ A. 決算比較、B. 価格品質・時点・期間整合、C. 日本株主画�
    - 理由別勝率や統合スコアへ進む前に、Snapshot schemaと前向き評価の継続性を検証する。
 2. **評価水準に必要なデータと比較条件の整備**
    - [`docs/VALUATION_READINESS.md`](docs/VALUATION_READINESS.md)でpoint-in-time選択と安全停止条件を実装した。Codex環境にAPIキーがなくCore20 live coverageは未確認のため、次はキー利用可能環境で同一Fiscal YearのForecast EPS Revision観測数を確定する。
-   - Current Forward PERは価格とFEPSのper-share basisを確認できた銘柄・期間だけを候補とする。Historical Self-PERはbasis連続性が未確認のためNo-Goを維持する。
+   - Current Forward PERは価格とFEPSのper-share basisを直接確認できた銘柄・期間だけを候補とする。`AdjFactor=1`はeffectiveな調整イベント未検出の証拠に限定し、basis一致とは扱わない。Historical Self-PERはbasis連続性が未確認のためNo-Goを維持する。
+   - Forecast EPS Revisionは同一Fiscal Year・Reference Period・会計定義内でもbasis確認済みペアだけを比較可能とする。分割検出時は`basis_changed`、直接確認できない場合は`basis_unverified`としてcoverageから除外する。
    - 公式Client raw SummaryにはBPS・純資産・株式数関連列があるが、現行正規化とbasis確認が不足するためPBRは表示しない。
    - 株価上昇率やTOPIX比を割安・割高の代用にせず、比較可能な同業・自社履歴がない倍率は単独で評価しない。
 

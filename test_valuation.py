@@ -44,7 +44,7 @@ def _prices():
 class ValuationReadinessTest(unittest.TestCase):
     def test_positive_forecast_and_price_calculate_forward_per(self):
         result = assess_current_forward_per(
-            pd.DataFrame([_forecast()]), _prices(), split_basis_status="aligned"
+            pd.DataFrame([_forecast()]), _prices(), split_basis_status="basis_verified"
         )
         self.assertTrue(result.calculable)
         self.assertEqual(result.status, "GO")
@@ -54,7 +54,8 @@ class ValuationReadinessTest(unittest.TestCase):
         for value in (0, -10, None):
             with self.subTest(value=value):
                 result = assess_current_forward_per(
-                    pd.DataFrame([_forecast(value=value)]), _prices(), split_basis_status="aligned"
+                    pd.DataFrame([_forecast(value=value)]), _prices(),
+                    split_basis_status="basis_verified"
                 )
                 self.assertFalse(result.calculable)
                 self.assertIsNone(result.forward_per)
@@ -63,7 +64,7 @@ class ValuationReadinessTest(unittest.TestCase):
         result = assess_current_forward_per(
             pd.DataFrame([_forecast(disclosure_date="2026-09-01")]),
             _prices(),
-            split_basis_status="aligned",
+            split_basis_status="basis_verified",
         )
         self.assertFalse(result.calculable)
         self.assertIn("株価基準日までに公表済み", result.reason)
@@ -74,7 +75,7 @@ class ValuationReadinessTest(unittest.TestCase):
                 result = assess_current_forward_per(
                     pd.DataFrame([_forecast(unit=unit, currency=currency)]),
                     _prices(),
-                    split_basis_status="aligned",
+                    split_basis_status="basis_verified",
                 )
                 self.assertFalse(result.calculable)
                 self.assertIn("単位または通貨", result.reason)
@@ -90,7 +91,7 @@ class ValuationReadinessTest(unittest.TestCase):
             _forecast(100, disclosure_date="2026-05-01"),
             _forecast(120, disclosure_date="2026-08-01"),
         ])
-        revisions = build_forecast_eps_revisions(records)
+        revisions = build_forecast_eps_revisions(records, basis_directly_verified=True)
         latest = revisions.iloc[-1]
         self.assertEqual(latest["previous_forecast_eps"], 100)
         self.assertEqual(latest["change"], 20)
@@ -111,7 +112,9 @@ class ValuationReadinessTest(unittest.TestCase):
             _forecast(-10, disclosure_date="2026-05-01"),
             _forecast(20, disclosure_date="2026-08-01"),
         ])
-        latest = build_forecast_eps_revisions(records).iloc[-1]
+        latest = build_forecast_eps_revisions(
+            records, basis_directly_verified=True
+        ).iloc[-1]
         self.assertEqual(latest["change"], 30)
         self.assertTrue(pd.isna(latest["change_pct"]))
         self.assertEqual(latest["revision_direction"], "turned_positive")
@@ -123,7 +126,7 @@ class ValuationReadinessTest(unittest.TestCase):
             forecast_available_on(records, "2026-08-04")["value"], 100
         )
         history = build_historical_forward_per(
-            records, _prices(), split_basis_status="aligned"
+            records, _prices(), split_basis_status="basis_verified"
         )
         self.assertNotIn("2026-08-03", set(history["price_date"]))
         self.assertIn("2026-08-04", set(history["price_date"]))
@@ -147,7 +150,8 @@ class ValuationReadinessTest(unittest.TestCase):
         changed.loc[2, "AdjFactor"] = 0.5
 
         self.assertEqual(
-            split_basis_status_from_daily_bars(aligned, "2026-08-02", dates[-1]), "aligned"
+            split_basis_status_from_daily_bars(aligned, "2026-08-02", dates[-1]),
+            "no_effective_action_detected"
         )
         self.assertEqual(
             split_basis_status_from_daily_bars(changed, "2026-08-02", dates[-1]),
@@ -176,10 +180,54 @@ class ValuationReadinessTest(unittest.TestCase):
         )
 
         self.assertEqual(len(report["rows"]), 20)
-        self.assertEqual(report["coverage"]["safe_current_forward_per"], 1)
-        self.assertEqual(report["coverage"]["forecast_revision_comparable"], 1)
+        self.assertEqual(report["coverage"]["safe_current_forward_per"], 0)
+        self.assertEqual(report["coverage"]["forecast_revision_comparable"], 0)
         self.assertEqual(report["coverage"]["safe_historical_forward_per"], 0)
         self.assertEqual(report["raw_summary_field_non_null_rows"]["BPS"], 1)
+
+    def test_revision_requires_same_reference_period(self):
+        first = _forecast(100, disclosure_date="2026-05-01")
+        second = _forecast(120, disclosure_date="2026-08-01")
+        second["reference_period"] = "2027-06-30"
+        revisions = build_forecast_eps_revisions(
+            pd.DataFrame([first, second]), basis_directly_verified=True
+        )
+        self.assertTrue(revisions["previous_forecast_eps"].isna().all())
+
+    def test_split_between_forecasts_is_not_counted_as_revision(self):
+        records = pd.DataFrame([
+            _forecast(300, disclosure_date="2026-05-01"),
+            _forecast(100, disclosure_date="2026-08-01"),
+        ])
+        dates = pd.bdate_range("2026-05-04", "2026-08-03")
+        bars = pd.DataFrame({"Date": dates, "AdjFactor": [1.0] * len(dates)})
+        bars.loc[bars["Date"].eq(pd.Timestamp("2026-07-01")), "AdjFactor"] = 1 / 3
+        latest = build_forecast_eps_revisions(
+            records, adjustment_bars=bars, basis_directly_verified=True
+        ).iloc[-1]
+        self.assertEqual(latest["basis_status"], "basis_changed")
+        self.assertEqual(latest["revision_direction"], "basis_changed")
+        self.assertTrue(pd.isna(latest["change_pct"]))
+
+    def test_revision_without_direct_basis_evidence_is_unverified(self):
+        records = pd.DataFrame([
+            _forecast(100, disclosure_date="2026-05-01"),
+            _forecast(120, disclosure_date="2026-08-01"),
+        ])
+        latest = build_forecast_eps_revisions(records).iloc[-1]
+        self.assertEqual(latest["basis_status"], "basis_unverified")
+        self.assertEqual(latest["revision_direction"], "basis_unverified")
+
+    def test_expired_or_invalid_forecast_is_not_used_in_history(self):
+        expired = _forecast(disclosure_date="2026-08-01")
+        expired["reference_period"] = "2026-08-04"
+        records = pd.DataFrame([expired])
+        self.assertIsNotNone(forecast_available_on(records, "2026-08-04"))
+        self.assertIsNone(forecast_available_on(records, "2026-08-05"))
+        history = build_historical_forward_per(
+            records, _prices(), split_basis_status="basis_verified"
+        )
+        self.assertEqual(set(history["price_date"]), {"2026-08-03", "2026-08-04"})
 
 
 if __name__ == "__main__":

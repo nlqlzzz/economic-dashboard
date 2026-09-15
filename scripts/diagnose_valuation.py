@@ -24,6 +24,7 @@ from jquants_loader import (
     to_jquants_code,
 )
 from valuation import (
+    COMPARABLE_REVISION_DIRECTIONS,
     assess_current_forward_per,
     assessment_dict,
     build_forecast_eps_revisions,
@@ -100,8 +101,12 @@ def build_live_report(
             selected, series, adjustment_bars.get(ticker, pd.DataFrame()), earliest=True
         )
         assessment = assess_current_forward_per(selected, series, split_basis_status=split_status)
-        revisions = build_forecast_eps_revisions(selected)
-        comparable = revisions[revisions["revision_direction"].ne("comparison_unavailable")]
+        revisions = build_forecast_eps_revisions(
+            selected, adjustment_bars=adjustment_bars.get(ticker, pd.DataFrame())
+        )
+        comparable = revisions[
+            revisions["revision_direction"].isin(COMPARABLE_REVISION_DIRECTIONS)
+        ]
         history = historical_feasibility(selected, history_split_status)
         revision_count = len(revisions.drop_duplicates(["fiscal_year", "disclosure_date"]))
         if not comparable.empty:
@@ -137,7 +142,9 @@ def build_live_report(
             "safe_current_forward_per": safe_current,
             "forecast_revision_comparable": revision_ready,
             "safe_historical_forward_per": safe_history,
-            "split_basis_unknown": sum(row["split_basis_status"] != "aligned" for row in rows),
+            "split_basis_unverified": sum(
+                row["split_basis_status"] != "basis_verified" for row in rows
+            ),
         },
         "pbr": normalized_pbr_readiness(records),
         "raw_summary_field_non_null_rows": raw_fields,
