@@ -4,7 +4,20 @@
 
 対象: Japan Core20
 
-live実測状態: **Environment Blocked / JQUANTS_API_KEY unavailable**
+今回のCodex環境でのlive再実測状態: **Environment Blocked / JQUANTS_API_KEY unavailable**
+
+## 2026-09-16 ユーザー環境live診断（補修前）
+
+ユーザー環境でPR #77版の診断を実行した結果は次のとおりだった。この値は今回のCodex環境で再実行した結果ではなく、補修前実装の診断履歴として保存する。
+
+- Financial Summary fetch failure: **0/20**
+- safe Current Forward PER: **0/20**
+- Forecast Revision comparable: **0/20**
+- Adjustment-factor fetch failure: **20/20**
+- split basis unverified: **20/20**
+- raw field non-null rows: `BPS=82`、`Eq=174`、`ShOutFY=174`、`AvgSh=174`
+
+この0/20は最終的なデータ品質No-Goではない。Financial Summaryの`NxFEPS`等を正規化しておらず、本決算時の次年度会社予想を落としていたこと、日足取得でYahoo最新日までを要求して遅延プランの提供範囲を超えた可能性が先に解消すべき原因だった。
 
 ## 結論
 
@@ -21,7 +34,7 @@ live実測状態: **Environment Blocked / JQUANTS_API_KEY unavailable**
 ## 利用可能なデータと確認結果
 
 - J-Quants公式Python Client 2.6.0の`get_fin_summary`を利用候補とする。既存の`fetch_financial_summaries`と`normalize_financial_summaries`を再利用する。
-- 正規化済み`forecast_eps`はFiscal Year、Disclosure Date、Accounting Standard、Consolidated Flag、Currency、Unitを保持する。
+- 正規化済み`forecast_eps`はFiscal Year、Reference Period、Disclosure Date、Accounting Standard、Consolidated Flag、Currency、Unitを保持する。`FEPS`と`NxFEPS`は同じmetricへ正規化しつつ、`source_field`と`forecast_scope=current_fy/next_fy`で由来を追跡する。`NxFEPS`の対象期は`NxtFYSt/NxtFYEn`だけを使い、欠損時に`CurFYEn`から推測しない。
 - インストール済み公式Clientの`FIN_SUMMARY_COLUMNS_V2`には`FEPS`、`BPS`、`NCBPS`、`Eq`、`NCEq`、`ShOutFY`、`AvgSh`が定義されている。ただし値のlive coverageは未確認であり、存在を取得済みと読み替えない。
 - 同Clientの日足列には`AdjFactor`、調整前OHLC、`AdjC`等がある。JPXもJ-Quants株価が分割等を考慮した調整済み・調整前価格を含むと説明している。しかし現在のアプリ価格はYahoo Finance `auto_adjust=True`であり、Summary FEPSと同じ1株basisかを示す共通識別子は現行正規化schemaにない。
 - 根拠のない分割係数推定は行わない。`AdjFactor=1`から分かるのは、観測区間にeffectiveな調整イベントが検出されなかったことだけであり、`no_effective_action_detected`と記録する。会社予想が将来の分割を先に反映した可能性は排除できないため、Current PERはFEPSと価格basisを直接確認できる`basis_verified`の場合だけ計算可能とする。
@@ -42,6 +55,8 @@ live実測状態: **Environment Blocked / JQUANTS_API_KEY unavailable**
 
 欠損を0に置換せず、複数条件に抵触した場合は理由を列挙する。
 
+候補選択は株価基準日までに公表済みで、対象期末が同日以降のforecastだけを対象にし、最も近い有効な対象期を選ぶ。同じ対象期では最新開示を選ぶため、期限切れ`FEPS`より有効な`NxFEPS`が優先される。
+
 ## Forecast EPS Revision
 
 `build_forecast_eps_revisions`はTicker、Fiscal Year、Reference Period、Accounting Standard、Consolidated Flag、Currency、Unitが同じcohort内だけをDisclosure Date順に比較する。
@@ -49,6 +64,7 @@ live実測状態: **Environment Blocked / JQUANTS_API_KEY unavailable**
 - 前回値が正の場合だけ前回比%を計算する。
 - 赤字予想・ゼロ跨ぎは金額差と`turned_positive` / `turned_non_positive`を優先する。
 - Fiscal Yearが変わる行は新しい系列の初回観測であり、上方・下方修正にしない。
+- `NxFEPS`から後続の`FEPS`へ名称が変わっても、Fiscal Year、Reference Period、会計定義、通貨・単位が同じなら同一対象年度の継続候補とする。原フィールド名だけで系列を分断しない。
 - 2開示間に`AdjFactor`の変化があれば`basis_changed`とし、通常のup/downや修正率には数えない。変化が検出されなくても直接basisを確認できなければ`basis_unverified`とし、live coverageの比較可能ペアに数えない。
 - Financial SummaryだけではTDnet上の正式な修正開示か判別できないため、「会社予想更新」候補である。
 
@@ -61,6 +77,8 @@ live実測状態: **Environment Blocked / JQUANTS_API_KEY unavailable**
 ## Core20 live診断表
 
 `—`は欠損値ではなく**今回未実測**を表す。各行の`NO-GO（未実測）`は環境上の実行ゲートであり、銘柄データ品質の最終評価ではない。
+
+更新後の診断JSONは銘柄別・全体について、最新Financial Summary開示日、最新利用可能J-Quants価格日、Yahoo価格基準日、およびYahoo基準日に対するlag日数を出力する。J-Quants日足はYahoo終端日を指定せず契約で利用可能な区間を取得する。過去のforecast開示間が取得区間に入ればrevisionの`basis_evidence`を診断できるが、J-Quants価格終端がYahoo最新日に届かなければCurrent PERのbasisは未確認のまま安全停止する。API失敗はレスポンス本文を保存せず、HTTP statusと`range_unavailable`、`rate_limit`、`access_denied`、`api_error`等へ分類する。
 
 | Ticker | 会社名 | Sector | Price date | Price | Forecast EPS | Forecast FY | Forecast disclosure | Current PER? / 理由 | Revision obs | Historical PER | Split basis | Sector caution | Verdict |
 | --- | --- | --- | --- | ---: | ---: | --- | --- | --- | ---: | --- | --- | --- | --- |
@@ -103,11 +121,11 @@ APIキーを環境変数またはignored `.streamlit/secrets.toml`へ安全に�
 python scripts/diagnose_valuation.py --output artifacts/valuation_readiness.json
 ```
 
-デフォルトはCore20を低頻度（5 requests/minute）で取得する。JSONはCore20各社の判定理由、revision観測、raw BPS・株式数関連フィールドの非null件数を分離して出力する。取得結果を文書へ反映する際は、実測日時・契約プラン・failure数を併記する。
+デフォルトはCore20を低頻度（5 requests/minute）で取得する。JSONはCore20各社の判定理由、revision観測、データ鮮度、raw BPS・株式数・NxF関連フィールドの非null件数を分離して出力する。取得結果を文書へ反映する際は、実測日時・契約プラン・failure分類を併記する。
 
 ## 次PRの推奨範囲
 
-1. **第1段階:** キー利用可能環境でCore20 live診断を実行し、同一Fiscal YearのForecast EPS Revision coverageを確定する。十分なら「会社予想更新履歴」だけを実装候補とする。
-2. **第2段階:** J-Quants調整係数・調整前後価格とFEPS/BPS/株式数のbasisを公式仕様・実データで突合する。確認できた銘柄・期間に限定してCurrent Forward PERを実装する。Historical PERとPBRはこの確認後に再判定する。
+1. **第1段階:** 更新したNxF正規化と遅延プラン対応でCore20 live診断を再実行し、同一Fiscal Year・Reference PeriodのForecast EPS Revision coverageを確定する。十分なら「会社予想更新履歴」だけを実装候補とする。
+2. **第2段階:** J-Quants調整係数・調整前後価格とFEPS/BPS/株式数のbasisを公式仕様・実データで突合する。2026-09-16実測ではraw `BPS=82`、`Eq=174`、`ShOutFY=174`、`AvgSh=174`だったが、normalizer/basis整備前のためPBRは再診断まで表示しない。確認できた銘柄・期間に限定してCurrent Forward PERを実装する。
 
 Decision Logのschema、Snapshot、前向き評価は今回変更していない。

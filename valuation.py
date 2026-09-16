@@ -67,13 +67,12 @@ def assess_current_forward_per(
         return _assessment_with_price(
             quality.status, current_price, price_date, split_basis_status, "forecast EPS欠損"
         )
-    forecasts = forecasts[pd.to_datetime(forecasts["disclosure_date"], errors="coerce") <= pd.Timestamp(price_date)]
-    if forecasts.empty:
+    row = select_current_forecast_eps(records, price_date, include_same_day=True)
+    if row is None:
         return _assessment_with_price(
             quality.status, current_price, price_date, split_basis_status,
-            "株価基準日までに公表済みのforecast EPSがない",
+            _forecast_selection_failure_reason(forecasts, price_date),
         )
-    row = forecasts.sort_values("disclosure_date").iloc[-1]
     common = _row_fields(row)
     eps = _number(row.get("value"))
     fiscal_year = _text(row.get("fiscal_year"))
@@ -125,7 +124,7 @@ def build_forecast_eps_revisions(
     """Compare FEPS only inside an identical fiscal-year/definition cohort."""
     forecasts = _forecast_rows(records)
     columns = list(forecasts.columns) + [
-        "previous_forecast_eps", "change", "change_pct", "basis_status",
+        "previous_forecast_eps", "change", "change_pct", "basis_evidence", "basis_status",
         "revision_direction"
     ]
     if forecasts.empty:
@@ -146,7 +145,7 @@ def build_forecast_eps_revisions(
             current = _number(row.get("value"))
             change = current - previous if current is not None and previous is not None else None
             change_pct = (change / previous * 100) if change is not None and previous > 0 else None
-            basis_status = _revision_basis_status(
+            basis_evidence, basis_status = _revision_basis_status(
                 adjustment_bars, previous_disclosure, row.get("disclosure_date"),
                 basis_directly_verified,
             )
@@ -163,6 +162,7 @@ def build_forecast_eps_revisions(
                 "previous_forecast_eps": previous,
                 "change": change,
                 "change_pct": change_pct,
+                "basis_evidence": basis_evidence,
                 "basis_status": basis_status,
                 "revision_direction": direction,
             })
@@ -176,19 +176,34 @@ def build_forecast_eps_revisions(
 
 def forecast_available_on(records: pd.DataFrame, price_date: object) -> Mapping[str, object] | None:
     """Return the last FEPS disclosed before a price date (next-session rule)."""
+    return select_current_forecast_eps(records, price_date, include_same_day=False)
+
+
+def select_current_forecast_eps(
+    records: pd.DataFrame,
+    price_date: object,
+    *,
+    include_same_day: bool = True,
+) -> Mapping[str, object] | None:
+    """Select the nearest still-valid FEPS target known at ``price_date``."""
     forecasts = _forecast_rows(records)
     if forecasts.empty:
         return None
     cutoff = pd.Timestamp(price_date).tz_localize(None).normalize()
     disclosed = pd.to_datetime(forecasts["disclosure_date"], errors="coerce")
-    eligible = forecasts[disclosed < cutoff].copy()
+    known = disclosed <= cutoff if include_same_day else disclosed < cutoff
+    eligible = forecasts[known].copy()
     eligible = eligible[
         eligible.apply(lambda row: _valid_forecast_for_price(row, cutoff), axis=1)
     ]
     if eligible.empty:
         return None
+    eligible["_reference"] = pd.to_datetime(eligible["reference_period"], errors="coerce")
     eligible["_disclosure"] = pd.to_datetime(eligible["disclosure_date"], errors="coerce")
-    return eligible.sort_values("_disclosure").iloc[-1].drop(labels=["_disclosure"]).to_dict()
+    chosen = eligible.sort_values(
+        ["_reference", "_disclosure"], ascending=[True, False]
+    ).iloc[0]
+    return chosen.drop(labels=["_reference", "_disclosure"]).to_dict()
 
 
 def build_historical_forward_per(
@@ -318,17 +333,17 @@ def _revision_basis_status(
     previous_disclosure: object | None,
     current_disclosure: object,
     directly_verified: bool,
-) -> str:
+) -> tuple[str, str]:
     if previous_disclosure is None:
-        return "comparison_unavailable"
+        return "comparison_unavailable", "comparison_unavailable"
     observed = split_basis_status_from_daily_bars(
         bars if bars is not None else pd.DataFrame(),
         previous_disclosure,
         current_disclosure,
     )
     if observed == "corporate_action_detected":
-        return "basis_changed"
-    return "basis_verified" if directly_verified else "basis_unverified"
+        return observed, "basis_changed"
+    return observed, "basis_verified" if directly_verified else "basis_unverified"
 
 
 def _valid_forecast_for_price(row: Mapping[str, object], price_date: pd.Timestamp) -> bool:
@@ -348,6 +363,29 @@ def _valid_forecast_for_price(row: Mapping[str, object], price_date: pd.Timestam
         and currency == "JPY"
         and unit in EPS_UNITS
     )
+
+
+def _forecast_selection_failure_reason(forecasts: pd.DataFrame, price_date: object) -> str:
+    cutoff = pd.Timestamp(price_date).normalize()
+    disclosed = pd.to_datetime(forecasts.get("disclosure_date"), errors="coerce")
+    known = forecasts[disclosed.le(cutoff)].copy()
+    if known.empty:
+        return "株価基準日までに公表済みのforecast EPSがない"
+    reasons: list[str] = []
+    references = pd.to_datetime(known.get("reference_period"), errors="coerce")
+    if references.isna().all():
+        reasons.append("Forecast対象期不明")
+    elif references.lt(cutoff).all():
+        reasons.append("株価基準日時点で有効なForecast対象期がない")
+    currency = known.get("currency", pd.Series(index=known.index, dtype=object))
+    unit = known.get("unit", pd.Series(index=known.index, dtype=object))
+    if not ((currency == "JPY") & unit.isin(EPS_UNITS)).any():
+        reasons.append("単位または通貨不整合")
+    standard = known.get("accounting_standard", pd.Series(index=known.index, dtype=object))
+    consolidated = known.get("consolidated_flag", pd.Series(index=known.index, dtype=object))
+    if not (standard.notna() & consolidated.notna()).any():
+        reasons.append("会計基準または連結区分不明")
+    return " / ".join(reasons) if reasons else "比較可能なforecast EPSがない"
 
 
 def assessment_dict(value: ForwardPERAssessment) -> dict[str, object]:

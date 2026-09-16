@@ -94,3 +94,29 @@ class FundamentalsTest(unittest.TestCase):
         }])], ignore_index=True)
         data = build_fundamentals_summary(raw, "自動車")
         self.assertTrue(data["forecast"].empty)
+
+    def test_next_year_forecast_is_used_after_current_year_has_expired(self):
+        raw = records()
+        forecasts = pd.DataFrame([
+            {
+                "metric": "forecast_eps", "value": 50, "ticker": "7203.T", "code": "7203",
+                "fiscal_year": "2026", "fiscal_quarter": "FY", "document_type": "Forecast",
+                "disclosure_date": "2026-05-01", "period_start": "2025-04-01",
+                "reference_period": "2026-03-31", "fiscal_year_start": "2025-04-01",
+                "fiscal_year_end": "2026-03-31", "accounting_standard": "IFRS",
+                "consolidated_flag": True, "unit": None, "currency": "JPY",
+                "source_field": "FEPS", "forecast_scope": "current_fy",
+            },
+            {
+                "metric": "forecast_eps", "value": 70, "ticker": "7203.T", "code": "7203",
+                "fiscal_year": "2027", "fiscal_quarter": "FY", "document_type": "Forecast",
+                "disclosure_date": "2026-05-01", "period_start": "2026-04-01",
+                "reference_period": "2027-03-31", "fiscal_year_start": "2026-04-01",
+                "fiscal_year_end": "2027-03-31", "accounting_standard": "IFRS",
+                "consolidated_flag": True, "unit": None, "currency": "JPY",
+                "source_field": "NxFEPS", "forecast_scope": "next_fy",
+            },
+        ])
+        data = build_fundamentals_summary(pd.concat([raw, forecasts], ignore_index=True), "自動車")
+        self.assertEqual(float(data["forecast"].iloc[0]["value"]), 70.0)
+        self.assertEqual(data["forecast"].iloc[0]["source_field"], "NxFEPS")

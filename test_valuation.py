@@ -7,11 +7,12 @@ from valuation import (
     build_forecast_eps_revisions,
     build_historical_forward_per,
     forecast_available_on,
+    select_current_forecast_eps,
     normalized_pbr_readiness,
     sector_valuation_caution,
     split_basis_status_from_daily_bars,
 )
-from scripts.diagnose_valuation import build_live_report
+from scripts.diagnose_valuation import _load_adjustment_bars, build_live_report
 
 
 def _forecast(
@@ -228,6 +229,89 @@ class ValuationReadinessTest(unittest.TestCase):
             records, _prices(), split_basis_status="basis_verified"
         )
         self.assertEqual(set(history["price_date"]), {"2026-08-03", "2026-08-04"})
+
+    def test_valid_next_forecast_wins_over_expired_current_forecast(self):
+        current = _forecast(100, fiscal_year="2026", disclosure_date="2026-05-01")
+        current["reference_period"] = "2026-06-30"
+        current["forecast_scope"] = "current_fy"
+        current["source_field"] = "FEPS"
+        next_year = _forecast(130, fiscal_year="2027", disclosure_date="2026-05-01")
+        next_year["forecast_scope"] = "next_fy"
+        next_year["source_field"] = "NxFEPS"
+        selected = select_current_forecast_eps(
+            pd.DataFrame([current, next_year]), "2026-08-05"
+        )
+        self.assertEqual(selected["value"], 130)
+        self.assertEqual(selected["source_field"], "NxFEPS")
+
+    def test_next_eps_continues_into_same_year_current_eps_revision(self):
+        next_year = _forecast(100, fiscal_year="2027", disclosure_date="2026-05-01")
+        next_year["source_field"] = "NxFEPS"
+        next_year["forecast_scope"] = "next_fy"
+        current = _forecast(120, fiscal_year="2027", disclosure_date="2026-08-01")
+        current["source_field"] = "FEPS"
+        current["forecast_scope"] = "current_fy"
+        latest = build_forecast_eps_revisions(
+            pd.DataFrame([next_year, current]), basis_directly_verified=True
+        ).iloc[-1]
+        self.assertEqual(latest["previous_forecast_eps"], 100)
+        self.assertEqual(latest["revision_direction"], "up")
+
+    def test_delayed_jquants_range_keeps_past_basis_evidence_but_stops_current_per(self):
+        records = pd.DataFrame([
+            _forecast(100, disclosure_date="2026-05-01"),
+            _forecast(120, disclosure_date="2026-08-01"),
+        ])
+        prices = pd.DataFrame({
+            "7203.T": pd.Series(
+                [1000.0, 1100.0], index=pd.to_datetime(["2026-05-04", "2026-09-15"])
+            )
+        })
+        dates = pd.bdate_range("2026-05-01", "2026-08-31")
+        bars = pd.DataFrame({"Date": dates, "AdjFactor": [1.0] * len(dates)})
+
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+            def get_eq_bars_daily(self, **kwargs):
+                self.calls.append(kwargs)
+                return bars
+
+        client = FakeClient()
+        loaded, failures = _load_adjustment_bars(
+            records, prices, 0, client=client
+        )
+        self.assertEqual(failures, ())
+        self.assertNotIn("to_yyyymmdd", client.calls[0])
+        revisions = build_forecast_eps_revisions(
+            records, adjustment_bars=loaded["7203.T"]
+        )
+        self.assertEqual(revisions.iloc[-1]["basis_evidence"], "no_effective_action_detected")
+        report = build_live_report(
+            records, prices, pd.DataFrame(), adjustment_bars=loaded
+        )
+        toyota = next(row for row in report["rows"] if row["ticker"] == "7203.T")
+        self.assertFalse(toyota["calculable"])
+        self.assertEqual(toyota["freshness"]["latest_jquants_price_date"], "2026-08-31")
+        self.assertEqual(toyota["freshness"]["jquants_price_lag_vs_yahoo_days"], 15)
+
+    def test_adjustment_api_failure_is_safely_classified_without_body(self):
+        records = pd.DataFrame([_forecast()])
+        prices = pd.DataFrame({"7203.T": _prices()})
+
+        class Response:
+            status_code = 429
+        class ProviderError(Exception):
+            response = Response()
+        class FakeClient:
+            def get_eq_bars_daily(self, **kwargs):
+                raise ProviderError("secret provider response must not be retained")
+
+        _, failures = _load_adjustment_bars(records, prices, 0, client=FakeClient())
+        self.assertEqual(failures, ({
+            "code": "7203", "category": "rate_limit", "http_status": 429
+        },))
+        self.assertNotIn("provider", str(failures))
 
 
 if __name__ == "__main__":

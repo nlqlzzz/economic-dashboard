@@ -74,10 +74,10 @@ A. 決算比較、B. 価格品質・時点・期間整合、C. 日本株主画�
    - Supabase設定後に実判断・仮想判断を蓄積し、未満了・価格品質・共通終点欠損の扱いが実データでも明確か確認する。
    - 理由別勝率や統合スコアへ進む前に、Snapshot schemaと前向き評価の継続性を検証する。
 2. **評価水準に必要なデータと比較条件の整備**
-   - [`docs/VALUATION_READINESS.md`](docs/VALUATION_READINESS.md)でpoint-in-time選択と安全停止条件を実装した。Codex環境にAPIキーがなくCore20 live coverageは未確認のため、次はキー利用可能環境で同一Fiscal YearのForecast EPS Revision観測数を確定する。
+   - [`docs/VALUATION_READINESS.md`](docs/VALUATION_READINESS.md)でpoint-in-time選択と安全停止条件を実装した。2026-09-16 live診断はSummary失敗0/20に対しCurrent PER・revision comparableとも0/20、調整係数失敗20/20だったため、次年度`NxF`正規化と遅延プラン対応を追加した。更新スクリプトで鮮度と再coverageを確認する。
    - Current Forward PERは価格とFEPSのper-share basisを直接確認できた銘柄・期間だけを候補とする。`AdjFactor=1`はeffectiveな調整イベント未検出の証拠に限定し、basis一致とは扱わない。Historical Self-PERはbasis連続性が未確認のためNo-Goを維持する。
    - Forecast EPS Revisionは同一Fiscal Year・Reference Period・会計定義内でもbasis確認済みペアだけを比較可能とする。分割検出時は`basis_changed`、直接確認できない場合は`basis_unverified`としてcoverageから除外する。
-   - 公式Client raw SummaryにはBPS・純資産・株式数関連列があるが、現行正規化とbasis確認が不足するためPBRは表示しない。
+   - 2026-09-16 live raw Summaryでは`BPS=82`、`Eq=174`、`ShOutFY=174`、`AvgSh=174`を確認したが、現行正規化とbasis確認が不足するためPBRは表示しない。
    - 株価上昇率やTOPIX比を割安・割高の代用にせず、比較可能な同業・自社履歴がない倍率は単独で評価しない。
 
 Corporate Events Lite、TDnet Full、Event Study、General Newsは、A〜Cの主導線を安定化した後に別途優先順位を判断する。TDnetで不足する詳細Fundamentalsが必要な場合だけ、EDINET APIのXBRLを候補として調査する。

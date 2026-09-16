@@ -72,16 +72,16 @@ def _current_forecast_cohort(records: pd.DataFrame, latest_period: dict[str, obj
         value = latest_period.get(column)
         if value is not None:
             forecast = forecast[forecast[column].eq(value)]
-    years = pd.to_numeric(forecast["fiscal_year"], errors="coerce")
-    current_year = pd.to_numeric(pd.Series([fiscal_year]), errors="coerce").iloc[0]
-    if pd.isna(current_year):
+    as_of = pd.to_datetime(forecast["disclosure_date"], errors="coerce").max()
+    if pd.isna(as_of):
         return pd.DataFrame(columns=forecast.columns), "Unavailable"
-    # The newest actual FY can already be complete; then the next FY forecast is
-    # the current company outlook.  Never fall back to an older target FY.
-    target_year = years[years >= current_year].min()
-    forecast = forecast[years.eq(target_year)] if pd.notna(target_year) else pd.DataFrame(columns=forecast.columns)
+    references = pd.to_datetime(forecast["reference_period"], errors="coerce")
+    forecast = forecast[references.ge(as_of)].copy()
     if forecast.empty:
         return forecast, "Unavailable"
+    references = pd.to_datetime(forecast["reference_period"], errors="coerce")
+    target_period = references.min()
+    forecast = forecast[references.eq(target_period)]
     latest_date = pd.to_datetime(forecast["disclosure_date"], errors="coerce").max()
     if pd.isna(latest_date):
         return pd.DataFrame(columns=forecast.columns), "Unavailable"
