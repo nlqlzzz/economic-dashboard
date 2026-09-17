@@ -7,11 +7,12 @@ from valuation import (
     build_forecast_eps_revisions,
     build_historical_forward_per,
     forecast_available_on,
+    select_current_forecast_eps,
     normalized_pbr_readiness,
     sector_valuation_caution,
     split_basis_status_from_daily_bars,
 )
-from scripts.diagnose_valuation import build_live_report
+from scripts.diagnose_valuation import _load_adjustment_bars, build_live_report
 
 
 def _forecast(
@@ -228,6 +229,186 @@ class ValuationReadinessTest(unittest.TestCase):
             records, _prices(), split_basis_status="basis_verified"
         )
         self.assertEqual(set(history["price_date"]), {"2026-08-03", "2026-08-04"})
+
+    def test_valid_next_forecast_wins_over_expired_current_forecast(self):
+        current = _forecast(100, fiscal_year="2026", disclosure_date="2026-05-01")
+        current["reference_period"] = "2026-06-30"
+        current["forecast_scope"] = "current_fy"
+        current["source_field"] = "FEPS"
+        next_year = _forecast(130, fiscal_year="2027", disclosure_date="2026-05-01")
+        next_year["forecast_scope"] = "next_fy"
+        next_year["source_field"] = "NxFEPS"
+        selected = select_current_forecast_eps(
+            pd.DataFrame([current, next_year]), "2026-08-05"
+        )
+        self.assertEqual(selected["value"], 130)
+        self.assertEqual(selected["source_field"], "NxFEPS")
+
+    def test_next_eps_continues_into_same_year_current_eps_revision(self):
+        next_year = _forecast(100, fiscal_year="2027", disclosure_date="2026-05-01")
+        next_year["source_field"] = "NxFEPS"
+        next_year["forecast_scope"] = "next_fy"
+        current = _forecast(120, fiscal_year="2027", disclosure_date="2026-08-01")
+        current["source_field"] = "FEPS"
+        current["forecast_scope"] = "current_fy"
+        latest = build_forecast_eps_revisions(
+            pd.DataFrame([next_year, current]), basis_directly_verified=True
+        ).iloc[-1]
+        self.assertEqual(latest["previous_forecast_eps"], 100)
+        self.assertEqual(latest["revision_direction"], "up")
+
+    def test_delayed_jquants_range_keeps_past_basis_evidence_but_stops_current_per(self):
+        records = pd.DataFrame([
+            _forecast(100, disclosure_date="2026-05-01"),
+            _forecast(120, disclosure_date="2026-08-01"),
+        ])
+        prices = pd.DataFrame({
+            "7203.T": pd.Series(
+                [1000.0, 1100.0], index=pd.to_datetime(["2026-05-04", "2026-09-15"])
+            )
+        })
+        dates = pd.bdate_range("2026-05-01", "2026-08-31")
+        bars = pd.DataFrame({"Date": dates, "AdjFactor": [1.0] * len(dates)})
+
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+            def get_eq_bars_daily(self, **kwargs):
+                self.calls.append(kwargs)
+                return bars
+
+        client = FakeClient()
+        loaded, failures = _load_adjustment_bars(
+            records, prices, 0, client=client
+        )
+        self.assertEqual(failures, ())
+        self.assertNotIn("to_yyyymmdd", client.calls[0])
+        revisions = build_forecast_eps_revisions(
+            records, adjustment_bars=loaded["7203.T"]
+        )
+        self.assertEqual(revisions.iloc[-1]["basis_evidence"], "no_effective_action_detected")
+        report = build_live_report(
+            records, prices, pd.DataFrame(), adjustment_bars=loaded
+        )
+        toyota = next(row for row in report["rows"] if row["ticker"] == "7203.T")
+        self.assertFalse(toyota["calculable"])
+        self.assertEqual(toyota["freshness"]["latest_jquants_price_date"], "2026-08-31")
+        self.assertEqual(toyota["freshness"]["jquants_price_lag_vs_yahoo_days"], 15)
+        self.assertEqual(report["adjustment_bars_success_count"], 1)
+        self.assertEqual(
+            report["revision_pair_evidence_counts"]["no_effective_action_detected"], 1
+        )
+        self.assertEqual(report["revision_pair_evidence_counts"]["basis_unverified"], 1)
+
+    def test_adjustment_api_failure_is_safely_classified_without_body(self):
+        records = pd.DataFrame([_forecast()])
+        prices = pd.DataFrame({"7203.T": _prices()})
+
+        class Response:
+            status_code = 429
+        class ProviderError(Exception):
+            response = Response()
+        class FakeClient:
+            def get_eq_bars_daily(self, **kwargs):
+                raise ProviderError("secret provider response must not be retained")
+
+        clock = _FakeClock()
+        _, failures = _load_adjustment_bars(
+            records, prices, 0, client=FakeClient(), max_retries=1,
+            sleep=clock.sleep, monotonic=clock.monotonic,
+        )
+        self.assertEqual(failures, ({
+            "code": "7203", "category": "rate_limit", "http_status": 429,
+            "attempts": 2,
+        },))
+        self.assertNotIn("provider", str(failures))
+        report = build_live_report(
+            records, prices, pd.DataFrame(), adjustment_failures=failures
+        )
+        self.assertEqual(report["adjustment_bars_success_count"], 0)
+        self.assertEqual(report["adjustment_failure_category_counts"], {"rate_limit": 1})
+
+    def test_corporate_action_evidence_is_counted_separately(self):
+        records = pd.DataFrame([
+            _forecast(100, disclosure_date="2026-08-01"),
+            _forecast(50, disclosure_date="2026-08-05"),
+        ])
+        index = pd.bdate_range("2026-08-03", "2026-08-07")
+        prices = pd.DataFrame({"7203.T": pd.Series([1000.0] * len(index), index=index)})
+        bars = pd.DataFrame({"Date": index, "AdjFactor": [1.0, 0.5, 1.0, 1.0, 1.0]})
+        report = build_live_report(
+            records, prices, pd.DataFrame(), adjustment_bars={"7203.T": bars}
+        )
+        self.assertEqual(
+            report["revision_pair_evidence_counts"]["corporate_action_detected"], 1
+        )
+
+    def test_rate_limit_retries_are_bounded_and_rolling_interval_is_respected(self):
+        records = pd.DataFrame([_forecast()])
+        prices = pd.DataFrame({"7203.T": _prices()})
+        bars = pd.DataFrame({"Date": _prices().index, "AdjFactor": [1.0] * len(_prices())})
+        clock = _FakeClock()
+
+        class Response:
+            status_code = 429
+        class RateLimitError(Exception):
+            response = Response()
+        class FlakyClient:
+            def __init__(self):
+                self.calls = []
+            def get_eq_bars_daily(self, **kwargs):
+                self.calls.append(clock.monotonic())
+                if len(self.calls) < 3:
+                    raise RateLimitError("body must not escape")
+                return bars
+
+        client = FlakyClient()
+        loaded, failures = _load_adjustment_bars(
+            records, prices, 4.0, client=client, max_retries=2,
+            sleep=clock.sleep, monotonic=clock.monotonic,
+        )
+        self.assertIn("7203.T", loaded)
+        self.assertEqual(failures, ())
+        self.assertEqual(len(client.calls), 3)
+        self.assertTrue(all(
+            later - earlier > 15.0
+            for earlier, later in zip(client.calls, client.calls[1:])
+        ))
+
+    def test_unknown_status_stops_after_maximum_retry_without_response_body(self):
+        records = pd.DataFrame([_forecast()])
+        prices = pd.DataFrame({"7203.T": _prices()})
+        clock = _FakeClock()
+
+        class BrokenClient:
+            def __init__(self):
+                self.calls = 0
+            def get_eq_bars_daily(self, **kwargs):
+                self.calls += 1
+                raise RuntimeError("provider body API_KEY=do-not-store")
+
+        client = BrokenClient()
+        _, failures = _load_adjustment_bars(
+            records, prices, 4.0, client=client, max_retries=2,
+            sleep=clock.sleep, monotonic=clock.monotonic,
+        )
+        self.assertEqual(client.calls, 3)
+        self.assertEqual(failures[0]["category"], "api_error")
+        self.assertEqual(failures[0]["attempts"], 3)
+        self.assertNotIn("API_KEY", str(failures))
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(float(seconds))
+        self.now += float(seconds)
 
 
 if __name__ == "__main__":

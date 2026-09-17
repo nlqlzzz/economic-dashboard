@@ -21,12 +21,15 @@ import pandas as pd
 
 SOURCE_NAME = "J-Quants API V2 Financial Summary"
 SOURCE_URL = "https://jpx-jquants.com/"
+DEFAULT_REQUESTS_PER_MINUTE = 4.0
+REQUEST_INTERVAL_SAFETY_SECONDS = 0.25
 REQUIRED_COLUMNS = (
     "ticker", "code", "jquants_code", "company_name", "disclosure_date",
     "period_start", "reference_period", "fiscal_year_start", "fiscal_year_end",
     "fiscal_year", "fiscal_quarter", "document_type",
     "accounting_standard", "consolidated_flag", "metric", "value", "unit",
-    "currency", "is_cumulative", "is_derived", "source_name", "source_url", "fetched_at",
+    "currency", "is_cumulative", "is_derived", "source_field", "forecast_scope",
+    "source_name", "source_url", "fetched_at",
 )
 
 
@@ -113,10 +116,10 @@ def fetch_financial_summaries(
     code_list = [to_jquants_code(code) for code in codes]
     if requests_per_minute is None:
         try:
-            requests_per_minute = float(os.getenv("JQUANTS_REQUESTS_PER_MINUTE", "5"))
+            requests_per_minute = float(os.getenv("JQUANTS_REQUESTS_PER_MINUTE", "4"))
         except ValueError:
-            requests_per_minute = 5.0
-    pause = 60.0 / requests_per_minute if requests_per_minute and requests_per_minute > 0 else 0.0
+            requests_per_minute = DEFAULT_REQUESTS_PER_MINUTE
+    pause = request_interval_seconds(requests_per_minute)
     for position, code in enumerate(code_list):
         try:
             raw = client.get_fin_summary(code=code)
@@ -131,6 +134,13 @@ def fetch_financial_summaries(
             sleep(pause)
     raw_records = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     return JQuantsLoadResult(raw_records, tuple(failures), _utc_now())
+
+
+def request_interval_seconds(requests_per_minute: float | None) -> float:
+    """Return a conservative start-to-start interval below the provider ceiling."""
+    if not requests_per_minute or requests_per_minute <= 0:
+        return 0.0
+    return 60.0 / requests_per_minute + REQUEST_INTERVAL_SAFETY_SECONDS
 
 
 def normalize_financial_summaries(
@@ -160,6 +170,8 @@ def normalize_financial_summaries(
         fiscal_start = _date_or_none(record.get("CurFYSt"))
         reference_period = _date_or_none(record.get("CurPerEn"))
         fiscal_end = _date_or_none(record.get("CurFYEn"))
+        next_fiscal_start = _date_or_none(record.get("NxtFYSt"))
+        next_fiscal_end = _date_or_none(record.get("NxtFYEn"))
         document_type = _text_or_none(record.get("DocType"))
         base = {
             "ticker": ticker_by_code.get(code), "code": code or None, "jquants_code": source_code or None,
@@ -174,22 +186,52 @@ def normalize_financial_summaries(
             # trillion / hundred-million-yen formatter.
             "consolidated_flag": _consolidated_flag(document_type), "unit": "JPY", "currency": "JPY",
             "is_cumulative": _is_cumulative(period_type, cur_start, fiscal_start), "is_derived": False,
+            "source_field": None, "forecast_scope": None,
             "source_name": SOURCE_NAME, "source_url": SOURCE_URL, "fetched_at": fetched_at,
         }
-        for field, metric in (("Sales", "revenue"), ("OP", "operating_profit"), ("NP", "net_income"), ("EPS", "eps"),
-                              ("FSales", "forecast_revenue"), ("FOP", "forecast_operating_profit"),
-                              ("FNP", "forecast_net_income"), ("FEPS", "forecast_eps")):
+        fields = (
+            ("Sales", "revenue", None), ("OP", "operating_profit", None),
+            ("NP", "net_income", None), ("EPS", "eps", None),
+            ("FSales", "forecast_revenue", "current_fy"),
+            ("FOP", "forecast_operating_profit", "current_fy"),
+            ("FNP", "forecast_net_income", "current_fy"),
+            ("FEPS", "forecast_eps", "current_fy"),
+            ("NxFSales", "forecast_revenue", "next_fy"),
+            ("NxFOP", "forecast_operating_profit", "next_fy"),
+            ("NxFNP", "forecast_net_income", "next_fy"),
+            ("NxFEPS", "forecast_eps", "next_fy"),
+        )
+        for field, metric, forecast_scope in fields:
             value = _number_or_none(record.get(field))
             if value is not None:
                 # Forecast fields are for the fiscal year ending at CurFYEn, not
                 # for the currently reported quarter.  Keep that target period
                 # explicit so a forecast is never plotted as a next-quarter fact.
-                forecast_base = (
-                    {**base, "fiscal_quarter": "FY", "reference_period": fiscal_end,
-                     "is_cumulative": True}
-                    if metric.startswith("forecast_") else base
-                )
-                rows.append({**forecast_base, "metric": metric, "value": value})
+                if forecast_scope == "current_fy":
+                    forecast_base = {
+                        **base, "period_start": fiscal_start,
+                        "reference_period": fiscal_end, "fiscal_year_start": fiscal_start,
+                        "fiscal_year_end": fiscal_end,
+                        "fiscal_year": fiscal_end[:4] if fiscal_end else None,
+                        "fiscal_quarter": "FY", "is_cumulative": True,
+                    }
+                elif forecast_scope == "next_fy":
+                    # Never infer the next target from CurFYEn.  Missing NxtFY
+                    # evidence remains missing and is rejected by selectors.
+                    forecast_base = {
+                        **base, "period_start": next_fiscal_start,
+                        "reference_period": next_fiscal_end,
+                        "fiscal_year_start": next_fiscal_start,
+                        "fiscal_year_end": next_fiscal_end,
+                        "fiscal_year": next_fiscal_end[:4] if next_fiscal_end else None,
+                        "fiscal_quarter": "FY", "is_cumulative": True,
+                    }
+                else:
+                    forecast_base = base
+                rows.append({
+                    **forecast_base, "metric": metric, "value": value,
+                    "source_field": field, "forecast_scope": forecast_scope,
+                })
     result = pd.DataFrame(rows, columns=REQUIRED_COLUMNS)
     return result.sort_values(["ticker", "metric", "disclosure_date"], na_position="last").reset_index(drop=True) if not result.empty else result
 

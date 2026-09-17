@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from datetime import date
 import json
 from pathlib import Path
@@ -21,6 +22,7 @@ from jquants_loader import (
     fetch_financial_summaries,
     get_jquants_api_key,
     normalize_financial_summaries,
+    request_interval_seconds,
     to_jquants_code,
 )
 from valuation import (
@@ -37,7 +39,7 @@ from valuation import (
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Diagnose Core20 valuation data readiness.")
-    parser.add_argument("--requests-per-minute", type=float, default=5.0)
+    parser.add_argument("--requests-per-minute", type=float, default=4.0)
     parser.add_argument("--price-start", default="2016-01-01")
     parser.add_argument("--output", type=Path, help="Optional JSON output path.")
     args = parser.parse_args()
@@ -60,6 +62,9 @@ def main() -> int:
         company_by_code=company_by_code,
         fetched_at=loaded.fetched_at,
     )
+    # Financial Summary and daily bars share the same API allowance.  Keep the
+    # first bars call away from the final Summary call as well.
+    time.sleep(request_interval_seconds(args.requests_per_minute))
     adjustment_bars, adjustment_failures = _load_adjustment_bars(
         normalized, prices, args.requests_per_minute
     )
@@ -85,12 +90,14 @@ def build_live_report(
     fetched_at: str | None = None,
     *,
     adjustment_bars: dict[str, pd.DataFrame] | None = None,
-    adjustment_failures: tuple[str, ...] = (),
+    adjustment_failures: tuple[object, ...] = (),
 ) -> dict[str, object]:
     rows: list[dict[str, object]] = []
     revision_ready = 0
     safe_current = 0
     safe_history = 0
+    evidence_counts: Counter[str] = Counter()
+    basis_status_counts: Counter[str] = Counter()
     adjustment_bars = adjustment_bars or {}
     for stock in CORE_20:
         ticker = str(stock["ticker"])
@@ -107,7 +114,20 @@ def build_live_report(
         comparable = revisions[
             revisions["revision_direction"].isin(COMPARABLE_REVISION_DIRECTIONS)
         ]
+        evidence_counts.update(
+            value for value in revisions.get("basis_evidence", pd.Series(dtype=str)).dropna()
+            if value != "comparison_unavailable"
+        )
+        basis_status_counts.update(
+            value for value in revisions.get("basis_status", pd.Series(dtype=str)).dropna()
+            if value != "comparison_unavailable"
+        )
         history = historical_feasibility(selected, history_split_status)
+        latest_summary_date = _latest_date(selected.get("disclosure_date"))
+        latest_jquants_price_date = _latest_date(
+            adjustment_bars.get(ticker, pd.DataFrame()).get("Date")
+        )
+        yahoo_price_date = _latest_date(series.index if not series.empty else None)
         revision_count = len(revisions.drop_duplicates(["fiscal_year", "disclosure_date"]))
         if not comparable.empty:
             revision_ready += 1
@@ -123,20 +143,36 @@ def build_live_report(
             "forecast_eps_revision_observations": revision_count,
             "comparable_revision_pairs": len(comparable),
             "historical_forward_per_feasibility": history,
+            "freshness": _freshness(
+                latest_summary_date, latest_jquants_price_date, yahoo_price_date
+            ),
             "sector_specific_caution": sector_valuation_caution(str(stock["sector"])),
             "verdict": _overall_verdict(assessment.calculable, not comparable.empty, history["status"]),
         })
     raw_fields = {
         field: int(pd.to_numeric(raw_records.get(field), errors="coerce").notna().sum())
         if field in raw_records else 0
-        for field in ("BPS", "NCBPS", "Eq", "NCEq", "ShOutFY", "AvgSh")
+        for field in (
+            "BPS", "NCBPS", "Eq", "NCEq", "ShOutFY", "AvgSh",
+            "NxtFYSt", "NxtFYEn", "NxFSales", "NxFOP", "NxFNP", "NxFEPS",
+        )
     }
     return {
         "diagnostic_date": date.today().isoformat(),
         "fetched_at": fetched_at,
         # Keep diagnostics useful without persisting provider exception text.
         "failed_jquants_codes": [_failure_code(value) for value in failures],
-        "failed_adjustment_factor_codes": list(adjustment_failures),
+        "adjustment_factor_failures": list(adjustment_failures),
+        "adjustment_bars_success_count": len(adjustment_bars),
+        "adjustment_failure_category_counts": dict(Counter(
+            str(value.get("category", "unknown"))
+            for value in adjustment_failures if isinstance(value, dict)
+        )),
+        "revision_pair_evidence_counts": {
+            "no_effective_action_detected": evidence_counts["no_effective_action_detected"],
+            "corporate_action_detected": evidence_counts["corporate_action_detected"],
+            "basis_unverified": basis_status_counts["basis_unverified"],
+        },
         "coverage": {
             "core20": len(CORE_20),
             "safe_current_forward_per": safe_current,
@@ -148,6 +184,14 @@ def build_live_report(
         },
         "pbr": normalized_pbr_readiness(records),
         "raw_summary_field_non_null_rows": raw_fields,
+        "freshness": _freshness(
+            _latest_date(records.get("disclosure_date")),
+            _latest_date(pd.concat(
+                [frame.get("Date", pd.Series(dtype=object)) for frame in adjustment_bars.values()],
+                ignore_index=True,
+            ) if adjustment_bars else None),
+            _latest_date(prices.index if not prices.empty else None),
+        ),
         "rows": rows,
     }
 
@@ -164,6 +208,43 @@ def _failure_code(value: object) -> str:
     """Retain only a code-like identifier, never an API exception or response."""
     candidate = str(value).split(":", 1)[0].strip()
     return candidate if candidate.isdigit() and 4 <= len(candidate) <= 5 else "unknown"
+
+
+def _latest_date(values: object) -> str | None:
+    if values is None:
+        return None
+    converted = pd.to_datetime(values, errors="coerce")
+    if isinstance(converted, pd.Timestamp):
+        latest = converted
+    else:
+        valid = pd.Series(converted).dropna()
+        if valid.empty:
+            return None
+        latest = valid.max()
+    return None if pd.isna(latest) else pd.Timestamp(latest).strftime("%Y-%m-%d")
+
+
+def _freshness(
+    financial_summary_date: str | None,
+    jquants_price_date: str | None,
+    yahoo_price_date: str | None,
+) -> dict[str, object]:
+    anchor = pd.to_datetime(yahoo_price_date, errors="coerce")
+    def lag(value: str | None) -> int | None:
+        stamp = pd.to_datetime(value, errors="coerce")
+        return None if pd.isna(anchor) or pd.isna(stamp) else int((anchor - stamp).days)
+    today = pd.Timestamp(date.today())
+    yahoo_stamp = pd.to_datetime(yahoo_price_date, errors="coerce")
+    return {
+        "latest_financial_summary_disclosure_date": financial_summary_date,
+        "financial_summary_lag_vs_yahoo_days": lag(financial_summary_date),
+        "latest_jquants_price_date": jquants_price_date,
+        "jquants_price_lag_vs_yahoo_days": lag(jquants_price_date),
+        "yahoo_current_price_date": yahoo_price_date,
+        "yahoo_price_lag_vs_diagnostic_days": (
+            None if pd.isna(yahoo_stamp) else int((today - yahoo_stamp).days)
+        ),
+    }
 
 
 def _split_status(
@@ -185,19 +266,26 @@ def _split_status(
 
 
 def _load_adjustment_bars(
-    records: pd.DataFrame, prices: pd.DataFrame, requests_per_minute: float
-) -> tuple[dict[str, pd.DataFrame], tuple[str, ...]]:
-    api_key = get_jquants_api_key()
-    if not api_key:
-        return {}, tuple(str(stock["code"]) for stock in CORE_20)
-    from jquantsapi import ClientV2
-
-    client = ClientV2(api_key=api_key)
+    records: pd.DataFrame, prices: pd.DataFrame, requests_per_minute: float,
+    *, client: object | None = None, max_retries: int = 2,
+    sleep: object = time.sleep, monotonic: object = time.monotonic,
+) -> tuple[dict[str, pd.DataFrame], tuple[dict[str, object], ...]]:
+    if client is None:
+        api_key = get_jquants_api_key()
+        if not api_key:
+            return {}, tuple(
+                {"code": str(stock["code"]), "category": "api_key_unavailable", "http_status": None}
+                for stock in CORE_20
+            )
+        from jquantsapi import ClientV2
+        client = ClientV2(api_key=api_key)
     results: dict[str, pd.DataFrame] = {}
-    failures: list[str] = []
-    pause = 60.0 / requests_per_minute if requests_per_minute > 0 else 0.0
+    failures: list[dict[str, object]] = []
+    limiter = _IntervalLimiter(
+        request_interval_seconds(requests_per_minute), sleep=sleep, monotonic=monotonic
+    )
     candidates = [stock for stock in CORE_20 if stock["ticker"] in prices]
-    for position, stock in enumerate(candidates):
+    for stock in candidates:
         ticker, code = str(stock["ticker"]), str(stock["code"])
         selected = records[
             records.get("ticker", pd.Series(dtype=str)).eq(ticker)
@@ -206,19 +294,72 @@ def _load_adjustment_bars(
         disclosures = pd.to_datetime(selected.get("disclosure_date"), errors="coerce").dropna()
         series = prices[ticker].dropna().sort_index()
         if disclosures.empty or series.empty:
-            failures.append(code)
+            failures.append({"code": code, "category": "input_unavailable", "http_status": None})
             continue
-        try:
-            results[ticker] = client.get_eq_bars_daily(
-                code=to_jquants_code(code),
-                from_yyyymmdd=disclosures.min().strftime("%Y%m%d"),
-                to_yyyymmdd=pd.Timestamp(series.index[-1]).strftime("%Y%m%d"),
-            )
-        except Exception:
-            failures.append(code)
-        if pause and position < len(candidates) - 1:
-            time.sleep(pause)
+        for attempt in range(max_retries + 1):
+            limiter.wait()
+            try:
+                # Let J-Quants return the date window available to the active plan.
+                bars = client.get_eq_bars_daily(code=to_jquants_code(code))
+                if bars is None or bars.empty:
+                    failures.append({
+                        "code": code, "category": "range_unavailable",
+                        "http_status": None, "attempts": attempt + 1,
+                    })
+                else:
+                    results[ticker] = bars
+                break
+            except Exception as exc:
+                status = _http_status(exc)
+                category = _failure_category(status)
+                retryable = status == 429 or (status is None and category == "api_error")
+                if retryable and attempt < max_retries:
+                    sleep(min(2 ** attempt, 4))
+                    continue
+                failures.append({
+                    "code": code, "category": category,
+                    "http_status": status, "attempts": attempt + 1,
+                })
+                break
     return results, tuple(failures)
+
+
+class _IntervalLimiter:
+    def __init__(self, interval: float, *, sleep: object, monotonic: object) -> None:
+        self.interval = max(float(interval), 0.0)
+        self.sleep = sleep
+        self.monotonic = monotonic
+        self.last_call: float | None = None
+
+    def wait(self) -> None:
+        now = float(self.monotonic())
+        if self.last_call is not None:
+            remaining = self.interval - (now - self.last_call)
+            if remaining > 0:
+                self.sleep(remaining)
+                now = float(self.monotonic())
+        self.last_call = now
+
+
+def _failure_category(status: int | None) -> str:
+    if status == 429:
+        return "rate_limit"
+    if status in {401, 403}:
+        return "access_denied"
+    if status in {400, 404, 422}:
+        return "range_unavailable"
+    return "api_error"
+
+
+def _http_status(exc: Exception) -> int | None:
+    response = getattr(exc, "response", None)
+    value = getattr(response, "status_code", None)
+    if value is None:
+        value = getattr(exc, "status_code", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 if __name__ == "__main__":

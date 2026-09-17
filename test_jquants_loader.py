@@ -12,6 +12,7 @@ from jquants_loader import (
     fetch_financial_summaries,
     get_jquants_api_key,
     normalize_financial_summaries,
+    request_interval_seconds,
     to_jquants_code,
 )
 
@@ -32,6 +33,9 @@ class JQuantsCodeTest(unittest.TestCase):
         self.assertEqual(to_jquants_code("72030"), "72030")
         with self.assertRaises(ValueError):
             to_jquants_code("Toyota")
+
+    def test_default_diagnostic_interval_stays_below_five_calls_per_minute(self) -> None:
+        self.assertGreater(request_interval_seconds(4.0), 15.0)
 
 
 class JQuantsNormalizationTest(unittest.TestCase):
@@ -56,6 +60,27 @@ class JQuantsNormalizationTest(unittest.TestCase):
         row = self.normalized[self.normalized.metric.eq("forecast_revenue")].iloc[0]
         self.assertEqual(row["fiscal_quarter"], "FY")
         self.assertEqual(row["reference_period"], "2026-03-31")
+
+    def test_next_fiscal_year_forecast_uses_next_period_metadata(self) -> None:
+        raw = _raw_rows().iloc[-1:].copy()
+        raw["NxtFYSt"] = "2026-04-01"
+        raw["NxtFYEn"] = "2027-03-31"
+        raw["NxFEPS"] = 80.0
+        result = normalize_financial_summaries(raw, ticker_by_code={"7203": "7203.T"})
+        row = result[result.source_field.eq("NxFEPS")].iloc[0]
+        self.assertEqual(row["metric"], "forecast_eps")
+        self.assertEqual(row["forecast_scope"], "next_fy")
+        self.assertEqual(row["period_start"], "2026-04-01")
+        self.assertEqual(row["reference_period"], "2027-03-31")
+        self.assertEqual(row["fiscal_year"], "2027")
+
+    def test_next_forecast_does_not_guess_missing_target_period(self) -> None:
+        raw = _raw_rows().iloc[-1:].copy()
+        raw["NxFEPS"] = 80.0
+        result = normalize_financial_summaries(raw, ticker_by_code={"7203": "7203.T"})
+        row = result[result.source_field.eq("NxFEPS")].iloc[0]
+        self.assertTrue(pd.isna(row["reference_period"]))
+        self.assertTrue(pd.isna(row["fiscal_year"]))
 
     def test_normalizes_jquants_one_q_period_label_and_epoch_milliseconds(self) -> None:
         raw = _raw_rows().iloc[:1].copy()
