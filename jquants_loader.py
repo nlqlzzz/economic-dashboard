@@ -21,6 +21,8 @@ import pandas as pd
 
 SOURCE_NAME = "J-Quants API V2 Financial Summary"
 SOURCE_URL = "https://jpx-jquants.com/"
+DEFAULT_REQUESTS_PER_MINUTE = 4.0
+REQUEST_INTERVAL_SAFETY_SECONDS = 0.25
 REQUIRED_COLUMNS = (
     "ticker", "code", "jquants_code", "company_name", "disclosure_date",
     "period_start", "reference_period", "fiscal_year_start", "fiscal_year_end",
@@ -114,10 +116,10 @@ def fetch_financial_summaries(
     code_list = [to_jquants_code(code) for code in codes]
     if requests_per_minute is None:
         try:
-            requests_per_minute = float(os.getenv("JQUANTS_REQUESTS_PER_MINUTE", "5"))
+            requests_per_minute = float(os.getenv("JQUANTS_REQUESTS_PER_MINUTE", "4"))
         except ValueError:
-            requests_per_minute = 5.0
-    pause = 60.0 / requests_per_minute if requests_per_minute and requests_per_minute > 0 else 0.0
+            requests_per_minute = DEFAULT_REQUESTS_PER_MINUTE
+    pause = request_interval_seconds(requests_per_minute)
     for position, code in enumerate(code_list):
         try:
             raw = client.get_fin_summary(code=code)
@@ -132,6 +134,13 @@ def fetch_financial_summaries(
             sleep(pause)
     raw_records = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     return JQuantsLoadResult(raw_records, tuple(failures), _utc_now())
+
+
+def request_interval_seconds(requests_per_minute: float | None) -> float:
+    """Return a conservative start-to-start interval below the provider ceiling."""
+    if not requests_per_minute or requests_per_minute <= 0:
+        return 0.0
+    return 60.0 / requests_per_minute + REQUEST_INTERVAL_SAFETY_SECONDS
 
 
 def normalize_financial_summaries(

@@ -12,6 +12,7 @@ from jquants_loader import (
     fetch_financial_summaries,
     get_jquants_api_key,
     normalize_financial_summaries,
+    request_interval_seconds,
     to_jquants_code,
 )
 
@@ -32,6 +33,9 @@ class JQuantsCodeTest(unittest.TestCase):
         self.assertEqual(to_jquants_code("72030"), "72030")
         with self.assertRaises(ValueError):
             to_jquants_code("Toyota")
+
+    def test_default_diagnostic_interval_stays_below_five_calls_per_minute(self) -> None:
+        self.assertGreater(request_interval_seconds(4.0), 15.0)
 
 
 class JQuantsNormalizationTest(unittest.TestCase):

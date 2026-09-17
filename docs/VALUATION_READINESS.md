@@ -19,6 +19,19 @@
 
 この0/20は最終的なデータ品質No-Goではない。Financial Summaryの`NxFEPS`等を正規化しておらず、本決算時の次年度会社予想を落としていたこと、日足取得でYahoo最新日までを要求して遅延プランの提供範囲を超えた可能性が先に解消すべき原因だった。
 
+## 2026-09-17 ユーザー環境live診断（NxF補修後・レート制御補修前）
+
+- Financial Summary fetch failure: **0/20**
+- 有効なCurrent Forecast EPS選択: **14/20**
+- safe Current Forward PER: **0/20**
+- J-Quants adjustment bars取得成功: **5/20**
+- adjustment failure: `input_unavailable=3/20`、`api_error=12/20`
+- J-Quants最新価格日: **2026-06-25**
+- Yahoo最新価格日: **2026-09-17**（lag **84日**）
+- raw `NxFEPS=35`、`NxtFYEn=181`
+
+NxF正規化は期待どおり機能した。一方、既定5 calls/minuteは上限ぎりぎりであり、Financial Summaryに続けて日足を取得する呼び出し列とstatus不明エラーに対する再試行制御が不足していた。更新版は既定4 calls/minuteに安全余白を加え、全API call開始間隔を15秒超に保ち、429またはstatus不明の`api_error`だけを最大2回再試行する。
+
 ## 結論
 
 今回は本番画面へPER/PBRを追加していない。固定fixtureではpoint-in-time選択、予想修正比較、価格品質、通貨・単位、正のEPS、per-share basisを分離して判定できた。一方、このCodex環境では環境変数およびリポジトリ固有のignored Streamlit SecretsからAPIキーを参照できず、Core20のlive coverageは実測していない。過去の20/20 Fundamentals取得実績を、今回のvaluation coverageへ流用していない。
@@ -121,7 +134,7 @@ APIキーを環境変数またはignored `.streamlit/secrets.toml`へ安全に�
 python scripts/diagnose_valuation.py --output artifacts/valuation_readiness.json
 ```
 
-デフォルトはCore20を低頻度（5 requests/minute）で取得する。JSONはCore20各社の判定理由、revision観測、データ鮮度、raw BPS・株式数・NxF関連フィールドの非null件数を分離して出力する。取得結果を文書へ反映する際は、実測日時・契約プラン・failure分類を併記する。
+デフォルトはCore20を低頻度（4 requests/minute＋安全余白）で取得する。Financial Summaryと日足の境界にも同じ間隔を置き、429またはstatus不明の一時エラーは最大2回のbounded retryとbackoffを行う。JSONは取得成功銘柄数、failure分類別件数、revision pairの`no_effective_action_detected` / `corporate_action_detected` / `basis_unverified`件数、データ鮮度、raw BPS・株式数・NxF関連フィールドの非null件数を分離して出力する。取得結果を文書へ反映する際は、実測日時・契約プラン・failure分類を併記する。
 
 ## 次PRの推奨範囲
 

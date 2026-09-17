@@ -294,6 +294,11 @@ class ValuationReadinessTest(unittest.TestCase):
         self.assertFalse(toyota["calculable"])
         self.assertEqual(toyota["freshness"]["latest_jquants_price_date"], "2026-08-31")
         self.assertEqual(toyota["freshness"]["jquants_price_lag_vs_yahoo_days"], 15)
+        self.assertEqual(report["adjustment_bars_success_count"], 1)
+        self.assertEqual(
+            report["revision_pair_evidence_counts"]["no_effective_action_detected"], 1
+        )
+        self.assertEqual(report["revision_pair_evidence_counts"]["basis_unverified"], 1)
 
     def test_adjustment_api_failure_is_safely_classified_without_body(self):
         records = pd.DataFrame([_forecast()])
@@ -307,11 +312,103 @@ class ValuationReadinessTest(unittest.TestCase):
             def get_eq_bars_daily(self, **kwargs):
                 raise ProviderError("secret provider response must not be retained")
 
-        _, failures = _load_adjustment_bars(records, prices, 0, client=FakeClient())
+        clock = _FakeClock()
+        _, failures = _load_adjustment_bars(
+            records, prices, 0, client=FakeClient(), max_retries=1,
+            sleep=clock.sleep, monotonic=clock.monotonic,
+        )
         self.assertEqual(failures, ({
-            "code": "7203", "category": "rate_limit", "http_status": 429
+            "code": "7203", "category": "rate_limit", "http_status": 429,
+            "attempts": 2,
         },))
         self.assertNotIn("provider", str(failures))
+        report = build_live_report(
+            records, prices, pd.DataFrame(), adjustment_failures=failures
+        )
+        self.assertEqual(report["adjustment_bars_success_count"], 0)
+        self.assertEqual(report["adjustment_failure_category_counts"], {"rate_limit": 1})
+
+    def test_corporate_action_evidence_is_counted_separately(self):
+        records = pd.DataFrame([
+            _forecast(100, disclosure_date="2026-08-01"),
+            _forecast(50, disclosure_date="2026-08-05"),
+        ])
+        index = pd.bdate_range("2026-08-03", "2026-08-07")
+        prices = pd.DataFrame({"7203.T": pd.Series([1000.0] * len(index), index=index)})
+        bars = pd.DataFrame({"Date": index, "AdjFactor": [1.0, 0.5, 1.0, 1.0, 1.0]})
+        report = build_live_report(
+            records, prices, pd.DataFrame(), adjustment_bars={"7203.T": bars}
+        )
+        self.assertEqual(
+            report["revision_pair_evidence_counts"]["corporate_action_detected"], 1
+        )
+
+    def test_rate_limit_retries_are_bounded_and_rolling_interval_is_respected(self):
+        records = pd.DataFrame([_forecast()])
+        prices = pd.DataFrame({"7203.T": _prices()})
+        bars = pd.DataFrame({"Date": _prices().index, "AdjFactor": [1.0] * len(_prices())})
+        clock = _FakeClock()
+
+        class Response:
+            status_code = 429
+        class RateLimitError(Exception):
+            response = Response()
+        class FlakyClient:
+            def __init__(self):
+                self.calls = []
+            def get_eq_bars_daily(self, **kwargs):
+                self.calls.append(clock.monotonic())
+                if len(self.calls) < 3:
+                    raise RateLimitError("body must not escape")
+                return bars
+
+        client = FlakyClient()
+        loaded, failures = _load_adjustment_bars(
+            records, prices, 4.0, client=client, max_retries=2,
+            sleep=clock.sleep, monotonic=clock.monotonic,
+        )
+        self.assertIn("7203.T", loaded)
+        self.assertEqual(failures, ())
+        self.assertEqual(len(client.calls), 3)
+        self.assertTrue(all(
+            later - earlier > 15.0
+            for earlier, later in zip(client.calls, client.calls[1:])
+        ))
+
+    def test_unknown_status_stops_after_maximum_retry_without_response_body(self):
+        records = pd.DataFrame([_forecast()])
+        prices = pd.DataFrame({"7203.T": _prices()})
+        clock = _FakeClock()
+
+        class BrokenClient:
+            def __init__(self):
+                self.calls = 0
+            def get_eq_bars_daily(self, **kwargs):
+                self.calls += 1
+                raise RuntimeError("provider body API_KEY=do-not-store")
+
+        client = BrokenClient()
+        _, failures = _load_adjustment_bars(
+            records, prices, 4.0, client=client, max_retries=2,
+            sleep=clock.sleep, monotonic=clock.monotonic,
+        )
+        self.assertEqual(client.calls, 3)
+        self.assertEqual(failures[0]["category"], "api_error")
+        self.assertEqual(failures[0]["attempts"], 3)
+        self.assertNotIn("API_KEY", str(failures))
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(float(seconds))
+        self.now += float(seconds)
 
 
 if __name__ == "__main__":

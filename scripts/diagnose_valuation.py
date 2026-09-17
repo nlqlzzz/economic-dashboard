@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from datetime import date
 import json
 from pathlib import Path
@@ -21,6 +22,7 @@ from jquants_loader import (
     fetch_financial_summaries,
     get_jquants_api_key,
     normalize_financial_summaries,
+    request_interval_seconds,
     to_jquants_code,
 )
 from valuation import (
@@ -37,7 +39,7 @@ from valuation import (
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Diagnose Core20 valuation data readiness.")
-    parser.add_argument("--requests-per-minute", type=float, default=5.0)
+    parser.add_argument("--requests-per-minute", type=float, default=4.0)
     parser.add_argument("--price-start", default="2016-01-01")
     parser.add_argument("--output", type=Path, help="Optional JSON output path.")
     args = parser.parse_args()
@@ -60,6 +62,9 @@ def main() -> int:
         company_by_code=company_by_code,
         fetched_at=loaded.fetched_at,
     )
+    # Financial Summary and daily bars share the same API allowance.  Keep the
+    # first bars call away from the final Summary call as well.
+    time.sleep(request_interval_seconds(args.requests_per_minute))
     adjustment_bars, adjustment_failures = _load_adjustment_bars(
         normalized, prices, args.requests_per_minute
     )
@@ -91,6 +96,8 @@ def build_live_report(
     revision_ready = 0
     safe_current = 0
     safe_history = 0
+    evidence_counts: Counter[str] = Counter()
+    basis_status_counts: Counter[str] = Counter()
     adjustment_bars = adjustment_bars or {}
     for stock in CORE_20:
         ticker = str(stock["ticker"])
@@ -107,6 +114,14 @@ def build_live_report(
         comparable = revisions[
             revisions["revision_direction"].isin(COMPARABLE_REVISION_DIRECTIONS)
         ]
+        evidence_counts.update(
+            value for value in revisions.get("basis_evidence", pd.Series(dtype=str)).dropna()
+            if value != "comparison_unavailable"
+        )
+        basis_status_counts.update(
+            value for value in revisions.get("basis_status", pd.Series(dtype=str)).dropna()
+            if value != "comparison_unavailable"
+        )
         history = historical_feasibility(selected, history_split_status)
         latest_summary_date = _latest_date(selected.get("disclosure_date"))
         latest_jquants_price_date = _latest_date(
@@ -148,6 +163,16 @@ def build_live_report(
         # Keep diagnostics useful without persisting provider exception text.
         "failed_jquants_codes": [_failure_code(value) for value in failures],
         "adjustment_factor_failures": list(adjustment_failures),
+        "adjustment_bars_success_count": len(adjustment_bars),
+        "adjustment_failure_category_counts": dict(Counter(
+            str(value.get("category", "unknown"))
+            for value in adjustment_failures if isinstance(value, dict)
+        )),
+        "revision_pair_evidence_counts": {
+            "no_effective_action_detected": evidence_counts["no_effective_action_detected"],
+            "corporate_action_detected": evidence_counts["corporate_action_detected"],
+            "basis_unverified": basis_status_counts["basis_unverified"],
+        },
         "coverage": {
             "core20": len(CORE_20),
             "safe_current_forward_per": safe_current,
@@ -242,7 +267,8 @@ def _split_status(
 
 def _load_adjustment_bars(
     records: pd.DataFrame, prices: pd.DataFrame, requests_per_minute: float,
-    *, client: object | None = None,
+    *, client: object | None = None, max_retries: int = 2,
+    sleep: object = time.sleep, monotonic: object = time.monotonic,
 ) -> tuple[dict[str, pd.DataFrame], tuple[dict[str, object], ...]]:
     if client is None:
         api_key = get_jquants_api_key()
@@ -255,9 +281,11 @@ def _load_adjustment_bars(
         client = ClientV2(api_key=api_key)
     results: dict[str, pd.DataFrame] = {}
     failures: list[dict[str, object]] = []
-    pause = 60.0 / requests_per_minute if requests_per_minute > 0 else 0.0
+    limiter = _IntervalLimiter(
+        request_interval_seconds(requests_per_minute), sleep=sleep, monotonic=monotonic
+    )
     candidates = [stock for stock in CORE_20 if stock["ticker"] in prices]
-    for position, stock in enumerate(candidates):
+    for stock in candidates:
         ticker, code = str(stock["ticker"]), str(stock["code"])
         selected = records[
             records.get("ticker", pd.Series(dtype=str)).eq(ticker)
@@ -268,27 +296,59 @@ def _load_adjustment_bars(
         if disclosures.empty or series.empty:
             failures.append({"code": code, "category": "input_unavailable", "http_status": None})
             continue
-        try:
-            # Let J-Quants return the date window available to the active plan.
-            # Requesting through Yahoo's newer date can make delayed plans fail
-            # before their usable historical adjustment evidence is inspected.
-            bars = client.get_eq_bars_daily(code=to_jquants_code(code))
-            if bars is None or bars.empty:
-                failures.append({"code": code, "category": "range_unavailable", "http_status": None})
-            else:
-                results[ticker] = bars
-        except Exception as exc:
-            status = _http_status(exc)
-            category = (
-                "rate_limit" if status == 429 else
-                "access_denied" if status in {401, 403} else
-                "range_unavailable" if status in {400, 404, 422} else
-                "api_error"
-            )
-            failures.append({"code": code, "category": category, "http_status": status})
-        if pause and position < len(candidates) - 1:
-            time.sleep(pause)
+        for attempt in range(max_retries + 1):
+            limiter.wait()
+            try:
+                # Let J-Quants return the date window available to the active plan.
+                bars = client.get_eq_bars_daily(code=to_jquants_code(code))
+                if bars is None or bars.empty:
+                    failures.append({
+                        "code": code, "category": "range_unavailable",
+                        "http_status": None, "attempts": attempt + 1,
+                    })
+                else:
+                    results[ticker] = bars
+                break
+            except Exception as exc:
+                status = _http_status(exc)
+                category = _failure_category(status)
+                retryable = status == 429 or (status is None and category == "api_error")
+                if retryable and attempt < max_retries:
+                    sleep(min(2 ** attempt, 4))
+                    continue
+                failures.append({
+                    "code": code, "category": category,
+                    "http_status": status, "attempts": attempt + 1,
+                })
+                break
     return results, tuple(failures)
+
+
+class _IntervalLimiter:
+    def __init__(self, interval: float, *, sleep: object, monotonic: object) -> None:
+        self.interval = max(float(interval), 0.0)
+        self.sleep = sleep
+        self.monotonic = monotonic
+        self.last_call: float | None = None
+
+    def wait(self) -> None:
+        now = float(self.monotonic())
+        if self.last_call is not None:
+            remaining = self.interval - (now - self.last_call)
+            if remaining > 0:
+                self.sleep(remaining)
+                now = float(self.monotonic())
+        self.last_call = now
+
+
+def _failure_category(status: int | None) -> str:
+    if status == 429:
+        return "rate_limit"
+    if status in {401, 403}:
+        return "access_denied"
+    if status in {400, 404, 422}:
+        return "range_unavailable"
+    return "api_error"
 
 
 def _http_status(exc: Exception) -> int | None:
