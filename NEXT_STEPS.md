@@ -1,6 +1,6 @@
 # 次に進める改善
 
-最終更新: 2026-09-13
+最終更新: 2026-09-18
 
 このファイルには未完了の項目だけを記載します。完了済みの項目は[`docs/COMPLETED_ROADMAP.md`](docs/COMPLETED_ROADMAP.md)へ移します。
 
@@ -74,10 +74,12 @@ A. 決算比較、B. 価格品質・時点・期間整合、C. 日本株主画�
    - Supabase設定後に実判断・仮想判断を蓄積し、未満了・価格品質・共通終点欠損の扱いが実データでも明確か確認する。
    - 理由別勝率や統合スコアへ進む前に、Snapshot schemaと前向き評価の継続性を検証する。
 2. **評価水準に必要なデータと比較条件の整備**
-   - [`docs/VALUATION_READINESS.md`](docs/VALUATION_READINESS.md)でpoint-in-time選択と安全停止条件を実装した。2026-09-17 live診断ではNxFにより有効Forecast 14/20、日足取得5/20まで改善した。更新版は4 calls/minute未満の間隔とbounded retry、証拠別集計を追加しており、同条件で再coverageを確認する。
-   - Current Forward PERは価格とFEPSのper-share basisを直接確認できた銘柄・期間だけを候補とする。`AdjFactor=1`はeffectiveな調整イベント未検出の証拠に限定し、basis一致とは扱わない。Historical Self-PERはbasis連続性が未確認のためNo-Goを維持する。
-   - Forecast EPS Revisionは同一Fiscal Year・Reference Period・会計定義内でもbasis確認済みペアだけを比較可能とする。分割検出時は`basis_changed`、直接確認できない場合は`basis_unverified`としてcoverageから除外する。
-   - 2026-09-16 live raw Summaryでは`BPS=82`、`Eq=174`、`ShOutFY=174`、`AvgSh=174`を確認したが、現行正規化とbasis確認が不足するためPBRは表示しない。
+   - [`docs/VALUATION_READINESS.md`](docs/VALUATION_READINESS.md)でpoint-in-time選択と安全停止条件を実装した。Yahoo調整後価格とJ-Quants EPSを当アプリで組み合わせるCurrent Forward PERは停止し、`AdjFactor=1`を`basis_verified`へ緩和しない。
+   - 2026-09-18の最終live診断（**ユーザー提供結果**）は、Core20 20、Financial Summary取得失敗0、有効Current Forecast EPS 14/20、Adjustment bars成功17/20、API error 0、`input_unavailable` 3、safe Current Forward PER 0/20、Forecast Revision comparable 0/20、Historical Forward PER 0/20、split/per-share basis unverified 20/20。J-Quants価格終端2026-06-26、Yahoo価格終端2026-09-16、lag 82日だった。
+   - [`docs/JQUANTS_VALUATION_API_FIT.md`](docs/JQUANTS_VALUATION_API_FIT.md)で、同一提供元が算出する公式Valuation APIへ方針を切り替えて限定調査した。進行期会社予想純利益、当日終値、翌営業日反映は公式確認できた一方、株式数・企業行動・決算期変更の詳細計算仕様は非開示で、対象Fiscal Yearと元開示日もレスポンスにないため、自動PERは**HOLD**とする。
+   - 再開条件は、FwdEPS/FwdPERの株式数・自己株式・分割/併合・遡及修正の扱いを説明可能な範囲まで確認すること、対象年度の表示方針を決めること、Light以上の継続費用（月額1,650円・税込）を許容して代表銘柄を限定確認すること、公式Client v2.7.0への更新を検証すること。
+   - 条件が揃わなければ自動PERは保留し、次候補を同一対象年度・同一定義の会社予想売上/営業利益/純利益の更新履歴とDecision Logの接続とする。これはValuationとは表示しない。basis未確認のEPSペアから差額、修正率、方向判定、ランキング、シグナル、連続グラフを作らない。
+   - Historical PER、同業ランキング、割安/割高判定は対象外。2026-09-16 live raw Summaryで確認した`BPS=82`、`Eq=174`、`ShOutFY=174`、`AvgSh=174`も、normalizer/basis再診断前はPBR表示に使わない。
    - 株価上昇率やTOPIX比を割安・割高の代用にせず、比較可能な同業・自社履歴がない倍率は単独で評価しない。
 
 Corporate Events Lite、TDnet Full、Event Study、General Newsは、A〜Cの主導線を安定化した後に別途優先順位を判断する。TDnetで不足する詳細Fundamentalsが必要な場合だけ、EDINET APIのXBRLを候補として調査する。
