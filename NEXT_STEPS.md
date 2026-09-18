@@ -78,7 +78,7 @@ A. 決算比較、B. 価格品質・時点・期間整合、C. 日本株主画�
    - 2026-09-18の最終live診断（**ユーザー提供結果**）は、Core20 20、Financial Summary取得失敗0、有効Current Forecast EPS 14/20、Adjustment bars成功17/20、API error 0、`input_unavailable` 3、safe Current Forward PER 0/20、Forecast Revision comparable 0/20、Historical Forward PER 0/20、split/per-share basis unverified 20/20。J-Quants価格終端2026-06-26、Yahoo価格終端2026-09-16、lag 82日だった。
    - [`docs/JQUANTS_VALUATION_API_FIT.md`](docs/JQUANTS_VALUATION_API_FIT.md)で、同一提供元が算出する公式Valuation APIへ方針を切り替えて限定調査した。進行期会社予想純利益、当日終値、翌営業日反映は公式確認できた一方、株式数・企業行動・決算期変更の詳細計算仕様は非開示で、対象Fiscal Yearと元開示日もレスポンスにないため、自動PERは**HOLD**とする。
    - 再開条件は、FwdEPS/FwdPERの株式数・自己株式・分割/併合・遡及修正の扱いを説明可能な範囲まで確認すること、対象年度の表示方針を決めること、Light以上の継続費用（月額1,650円・税込）を許容して代表銘柄を限定確認すること、公式Client v2.7.0への更新を検証すること。
-   - 条件が揃わなければ自動PERは保留し、次候補を同一対象年度・同一定義の会社予想売上/営業利益/純利益の更新履歴とDecision Logの接続とする。これはValuationとは表示しない。basis未確認のEPSペアから差額、修正率、方向判定、ランキング、シグナル、連続グラフを作らない。
+   - 自動PERを保留した次の実装として、同一対象年度・同一定義の会社予想売上/営業利益/純利益の更新履歴を業績画面とDecision Log Snapshotへ接続した。これはValuationとは表示しない。basis未確認のEPSペアから差額、修正率、方向判定、ランキング、シグナル、連続グラフを作らない。
    - Historical PER、同業ランキング、割安/割高判定は対象外。2026-09-16 live raw Summaryで確認した`BPS=82`、`Eq=174`、`ShOutFY=174`、`AvgSh=174`も、normalizer/basis再診断前はPBR表示に使わない。
    - 株価上昇率やTOPIX比を割安・割高の代用にせず、比較可能な同業・自社履歴がない倍率は単独で評価しない。
 

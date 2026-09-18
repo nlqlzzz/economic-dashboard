@@ -536,6 +536,8 @@ def _render_fundamentals(detail: dict[str, object]) -> None:
                 value = format_financial_value(row["value"], str(row["metric"]).replace("forecast_", ""), row.get("unit"))
                 st.write(f"**{labels.get(row['metric'], row['metric'])}**　{value}")
             st.caption(f"対象年度: {forecast.iloc[0].get('fiscal_year')} ｜ 開示日: {forecast.iloc[0].get('disclosure_date')}。四半期実績の次期値としては扱いません。")
+        st.divider()
+        _render_company_forecast_updates(data.get("forecast_updates"))
     with tabs[2]:
         with st.expander("詳細データ・出所・導出方法を見る"):
             history = data["history"].copy()
@@ -544,6 +546,79 @@ def _render_fundamentals(detail: dict[str, object]) -> None:
                 history["比較"] = history["comparison"]
                 st.dataframe(history[["metric", "fiscal_year", "fiscal_quarter", "value", "比較", "前年比", "is_derived", "disclosure_date"]], hide_index=True, width="stretch")
             st.caption("is_derived=true は売上・利益の累計開示から安全に導出した単独四半期です。EPSは差分導出しません。")
+
+
+def _render_company_forecast_updates(updates: object) -> None:
+    st.markdown("**会社予想の変化**")
+    st.caption("同じ対象年度・対象期・会計定義で比較できる前回開示との差です。Valuationではありません。")
+    if not isinstance(updates, dict) or updates.get("status") != "Available":
+        st.info("比較可能な同一年度の会社予想がありません。")
+        return
+    rows = list(updates.get("latest") or [])
+    if not rows:
+        st.info("比較可能な同一年度の会社予想がありません。")
+        return
+    labels = {
+        "forecast_revenue": "売上高等",
+        "forecast_operating_profit": "営業利益",
+        "forecast_net_income": "純利益",
+    }
+    first = rows[0]
+    st.caption(
+        f"対象: {first.get('fiscal_year')}（期末 {first.get('reference_period')}）｜"
+        f"前回開示日: {min(row['previous_disclosure_date'] for row in rows)}｜"
+        f"最新開示日: {max(row['latest_disclosure_date'] for row in rows)}"
+    )
+    for row in rows:
+        metric = str(row["metric"])
+        unit = row.get("unit")
+        previous = format_financial_value(row.get("previous_value"), metric.replace("forecast_", ""), unit)
+        current = format_financial_value(row.get("current_value"), metric.replace("forecast_", ""), unit)
+        change = _signed_financial_value(row.get("absolute_change"), metric, unit)
+        pct = row.get("change_pct")
+        suffix = _forecast_transition_text(str(row.get("transition_status")), change, pct)
+        st.markdown(f"**{labels.get(metric, metric)}**　{previous} → {current}")
+        st.caption(suffix)
+    history = updates.get("history")
+    if not isinstance(history, pd.DataFrame) or history.empty:
+        return
+    with st.expander("会社予想の更新履歴を見る"):
+        st.caption("対象年度が異なる予想は別グループとし、EPSは比較していません。")
+        for (year, reference), group in history.groupby(["fiscal_year", "reference_period"], dropna=False):
+            st.markdown(f"**{year}（期末 {reference}）**")
+            for metric, metric_group in group.groupby("metric"):
+                view = metric_group.copy()
+                view["前回"] = view.apply(lambda row: format_financial_value(row["previous_value"], str(metric).replace("forecast_", ""), row.get("unit")), axis=1)
+                view["現在"] = view.apply(lambda row: format_financial_value(row["current_value"], str(metric).replace("forecast_", ""), row.get("unit")), axis=1)
+                view["変化"] = view.apply(lambda row: _forecast_transition_text(str(row["transition_status"]), _signed_financial_value(row["absolute_change"], str(metric), row.get("unit")), row.get("change_pct")), axis=1)
+                view["開示"] = view["previous_disclosure_date"].astype(str) + " → " + view["latest_disclosure_date"].astype(str)
+                st.caption(labels.get(str(metric), str(metric)))
+                st.dataframe(view[["開示", "前回", "現在", "変化"]], hide_index=True, width="stretch")
+
+
+def _forecast_transition_text(status: str, change: str, change_pct: object) -> str:
+    state = {
+        "turned_positive": "赤字から黒字",
+        "turned_negative": "黒字から赤字",
+        "loss_narrowing": "赤字縮小",
+        "loss_widening": "赤字拡大",
+        "unchanged": "据え置き",
+        "from_zero_increase": "ゼロから増加",
+        "from_zero_decrease": "ゼロから減少",
+        "increase": "増加",
+        "decrease": "減少",
+    }.get(status, "比較不能")
+    pct_text = ""
+    if change_pct is not None and not pd.isna(change_pct):
+        pct_text = f" / {float(change_pct):+.1f}%"
+    return f"{change} / {state}{pct_text}"
+
+
+def _signed_financial_value(value: object, metric: str, unit: object) -> str:
+    formatted = format_financial_value(value, metric.replace("forecast_", ""), unit)
+    if value is not None and not pd.isna(value) and float(value) > 0:
+        return "+" + formatted
+    return formatted
 
 
 def _render_stock_snapshot(detail: dict[str, object]) -> None:

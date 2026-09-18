@@ -9,6 +9,7 @@ from typing import Mapping
 import pandas as pd
 import streamlit as st
 
+from fundamentals import format_financial_value
 from decision_log import (
     DECISION_ACTIONS,
     DECISION_MODES,
@@ -201,7 +202,33 @@ def render_decision_history(
                     "絶対リターン、リスク、機会費用、手数料を含まず、正解・成功・実損益を意味しません。"
                 )
                 st.markdown("**判断時点Snapshot**")
+                _render_forecast_update_snapshot(record.get("data_snapshot") or {})
                 st.json(record.get("data_snapshot") or {})
+
+
+def _render_forecast_update_snapshot(snapshot: Mapping[str, object]) -> None:
+    update = snapshot.get("company_forecast_update")
+    if not isinstance(update, Mapping) or update.get("status") != "Available":
+        return
+    st.markdown("**判断時点の会社予想の変化**")
+    st.caption(
+        f"対象: {update.get('fiscal_year')}（期末 {update.get('reference_period')}）｜"
+        f"{update.get('previous_disclosure_date')} → {update.get('latest_disclosure_date')}"
+    )
+    labels = {
+        "forecast_revenue": "売上高等",
+        "forecast_operating_profit": "営業利益",
+        "forecast_net_income": "純利益",
+    }
+    metrics = update.get("metrics")
+    if not isinstance(metrics, Mapping):
+        return
+    for metric, values in metrics.items():
+        if not isinstance(values, Mapping):
+            continue
+        previous = format_financial_value(values.get("previous_value"), str(metric).replace("forecast_", ""), update.get("unit"))
+        current = format_financial_value(values.get("current_value"), str(metric).replace("forecast_", ""), update.get("unit"))
+        st.write(f"{labels.get(str(metric), str(metric))}: {previous} → {current}")
 
 
 def _render_password_gate(expected_password: str) -> None:
