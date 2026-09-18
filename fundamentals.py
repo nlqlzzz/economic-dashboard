@@ -118,6 +118,27 @@ def format_financial_value(value: object, metric: str, unit: object = None) -> s
     return "—" if value is None or pd.isna(value) else _trim(float(value)) + f" {unit}"
 
 
+def format_company_forecast_summary(value: object, metric: str, unit: object = None) -> str:
+    """Compact forecast-card formatter without changing other UI precision."""
+    if metric == "eps":
+        return format_eps(value)
+    if value is None or pd.isna(value):
+        return "—"
+    if unit is not None and not pd.isna(unit) and str(unit) not in {"JPY", "yen"}:
+        return _trim(float(value)) + f" {unit}"
+    amount = float(value)
+    if abs(amount) >= 1_000_000_000_000:
+        return f"{amount / 1_000_000_000_000:,.1f}兆円"
+    return format_jpy(amount)
+
+
+def format_forecast_period(reference_period: object, fiscal_year: object = None) -> str:
+    parsed = pd.to_datetime(reference_period, errors="coerce")
+    if not pd.isna(parsed):
+        return f"{parsed.year}年{parsed.month}月期"
+    return str(fiscal_year) if fiscal_year is not None else "対象期不明"
+
+
 def comparison_label(comparison: object, yoy: object = None, value_change: object = None, metric: str = "") -> str:
     labels = {"increase": "増加", "decrease": "減少", "flat": "横ばい", "profit_turnaround": "黒字転換", "loss_turnaround": "赤字転落", "loss_narrowing": "赤字縮小", "loss_widening": "赤字拡大", "from_zero_increase": "前年ゼロから増加", "from_zero_decrease": "前年ゼロから減少", "unavailable": "比較不能"}
     label = labels.get(str(comparison), "比較不能")

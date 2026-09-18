@@ -190,6 +190,102 @@ def forecast_update_snapshot(updates: object) -> dict[str, object]:
     }
 
 
+def select_company_forecast_update_cohort(
+    updates: object,
+    current_forecast: object,
+) -> dict[str, object]:
+    """Select updates matching the forecast currently shown in the UI.
+
+    Historical cohorts remain attached for the detail view, but are never used
+    as a fallback for the main current-forecast comparison.
+    """
+    history = updates.get("history") if isinstance(updates, dict) else None
+    if not isinstance(history, pd.DataFrame):
+        history = pd.DataFrame()
+    unavailable = {
+        "status": "Unavailable",
+        "reason": "現在表示中の対象年度には比較可能な前回予想がありません。",
+        "latest": [],
+        "history": history,
+        "schema_version": FORECAST_UPDATE_SCHEMA_VERSION,
+    }
+    if (
+        not isinstance(current_forecast, pd.DataFrame)
+        or current_forecast.empty
+        or history.empty
+    ):
+        return unavailable
+    current = current_forecast.iloc[0]
+    selected = history.copy()
+    for column in COHORT_COLUMNS:
+        value = current.get(column)
+        if value is None or pd.isna(value):
+            return unavailable
+        selected = selected[selected[column].eq(value)]
+    if selected.empty:
+        return unavailable
+    latest_event_date = selected["latest_disclosure_date"].max()
+    latest = (
+        selected[selected["latest_disclosure_date"].eq(latest_event_date)]
+        .drop_duplicates("metric", keep="last")
+        .sort_values("metric")
+    )
+    return {
+        "status": "Available",
+        "reason": "",
+        "latest": latest.to_dict("records"),
+        "history": history,
+        "schema_version": FORECAST_UPDATE_SCHEMA_VERSION,
+    }
+
+
+def build_forecast_history_observations(
+    history: pd.DataFrame,
+    cohort: dict[str, object],
+    metric: str,
+) -> pd.DataFrame:
+    """Reconstruct discrete disclosure snapshots for one cohort and metric."""
+    columns = (
+        "disclosure_date", "forecast_value", "previous_value",
+        "absolute_change", "change_pct", "transition_status",
+    )
+    if metric not in FORECAST_UPDATE_METRICS or history.empty:
+        return pd.DataFrame(columns=columns)
+    selected = history[history["metric"].eq(metric)].copy()
+    for column in COHORT_COLUMNS:
+        value = cohort.get(column)
+        if value is None or pd.isna(value):
+            return pd.DataFrame(columns=columns)
+        selected = selected[selected[column].eq(value)]
+    if selected.empty:
+        return pd.DataFrame(columns=columns)
+    selected = selected.sort_values("latest_disclosure_date")
+    first = selected.iloc[0]
+    rows: list[dict[str, object]] = [{
+        "disclosure_date": first["previous_disclosure_date"],
+        "forecast_value": first["previous_value"],
+        "previous_value": None,
+        "absolute_change": None,
+        "change_pct": None,
+        "transition_status": None,
+    }]
+    for _, row in selected.iterrows():
+        rows.append({
+            "disclosure_date": row["latest_disclosure_date"],
+            "forecast_value": row["current_value"],
+            "previous_value": row["previous_value"],
+            "absolute_change": row["absolute_change"],
+            "change_pct": row["change_pct"],
+            "transition_status": row["transition_status"],
+        })
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .drop_duplicates("disclosure_date", keep="last")
+        .sort_values("disclosure_date")
+        .reset_index(drop=True)
+    )
+
+
 def _transition_status(metric: str, previous: float, current: float) -> str:
     if current == previous:
         return "unchanged"

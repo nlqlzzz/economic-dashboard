@@ -228,7 +228,7 @@ def _render_forecast_update_snapshot(snapshot: Mapping[str, object]) -> None:
             continue
         previous = format_financial_value(values.get("previous_value"), str(metric).replace("forecast_", ""), update.get("unit"))
         current = format_financial_value(values.get("current_value"), str(metric).replace("forecast_", ""), update.get("unit"))
-        st.write(f"{labels.get(str(metric), str(metric))}: {previous} → {current}")
+        st.write(f"{labels.get(str(metric), str(metric))}: 前回 {previous} → 今回 {current}")
 
 
 def _render_password_gate(expected_password: str) -> None:
