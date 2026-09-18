@@ -3,11 +3,16 @@ from datetime import datetime
 
 import pandas as pd
 
-from decision_log import SCHEMA_VERSION, ReferencePrices, TOKYO, build_decision_snapshot
+from decision_log import (
+    SCHEMA_VERSION, SNAPSHOT_SCHEMA_VERSION, ReferencePrices, TOKYO,
+    build_decision_snapshot,
+)
 from forecast_updates import (
     FORECAST_UPDATE_METRICS,
+    build_forecast_history_observations,
     build_company_forecast_updates,
     forecast_update_snapshot,
+    select_company_forecast_update_cohort,
 )
 from jquants_loader import normalize_financial_summaries
 
@@ -42,6 +47,7 @@ def _row(
 class CompanyForecastUpdateTest(unittest.TestCase):
     def test_decision_log_database_schema_version_is_unchanged(self) -> None:
         self.assertEqual(SCHEMA_VERSION, 1)
+        self.assertEqual(SNAPSHOT_SCHEMA_VERSION, 2)
 
     def test_three_metrics_compare_within_same_fiscal_cohort(self) -> None:
         rows = []
@@ -189,6 +195,48 @@ class CompanyForecastUpdateTest(unittest.TestCase):
             build_company_forecast_updates(pd.DataFrame(rows))["status"],
             "Unavailable",
         )
+
+    def test_current_2027_forecast_does_not_fallback_to_2026_update(self) -> None:
+        updates = build_company_forecast_updates(pd.DataFrame([
+            _row("forecast_revenue", 90, "2025-05-01", fiscal_year="2026", reference_period="2026-03-31"),
+            _row("forecast_revenue", 100, "2025-08-01", fiscal_year="2026", reference_period="2026-03-31"),
+        ]))
+        current = pd.DataFrame([
+            _row("forecast_revenue", 110, "2026-05-01")
+        ])
+        selected = select_company_forecast_update_cohort(updates, current)
+        self.assertEqual(selected["status"], "Unavailable")
+        self.assertTrue(selected["history"].fiscal_year.eq("2026").all())
+
+    def test_current_2027_forecast_uses_same_2027_update(self) -> None:
+        records = pd.DataFrame([
+            _row("forecast_revenue", 100, "2026-05-01"),
+            _row("forecast_revenue", 110, "2026-08-01"),
+        ])
+        updates = build_company_forecast_updates(records)
+        selected = select_company_forecast_update_cohort(updates, records.iloc[-1:])
+        self.assertEqual(selected["status"], "Available")
+        self.assertEqual(selected["latest"][0]["fiscal_year"], "2027")
+
+    def test_history_observations_never_mix_fiscal_year_or_eps(self) -> None:
+        records = pd.DataFrame([
+            _row("forecast_revenue", 90, "2025-05-01", fiscal_year="2026", reference_period="2026-03-31"),
+            _row("forecast_revenue", 100, "2025-08-01", fiscal_year="2026", reference_period="2026-03-31"),
+            _row("forecast_revenue", 110, "2026-05-01"),
+            _row("forecast_revenue", 120, "2026-08-01"),
+        ])
+        updates = build_company_forecast_updates(records)
+        cohort = {column: records.iloc[-1][column] for column in (
+            "ticker", "fiscal_year", "reference_period", "accounting_standard",
+            "consolidated_flag", "currency", "unit",
+        )}
+        observations = build_forecast_history_observations(
+            updates["history"], cohort, "forecast_revenue"
+        )
+        self.assertEqual(list(observations["disclosure_date"]), ["2026-05-01", "2026-08-01"])
+        self.assertTrue(build_forecast_history_observations(
+            updates["history"], cohort, "forecast_eps"
+        ).empty)
 
 
 if __name__ == "__main__":

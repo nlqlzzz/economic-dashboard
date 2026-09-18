@@ -5,12 +5,16 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from chart_interaction import exploratory_chart_config, make_chart_static
+from forecast_updates import (
+    COHORT_COLUMNS, FORECAST_UPDATE_METRICS, build_forecast_history_observations,
+    select_company_forecast_update_cohort,
+)
 
 from japan_equity import CORE_20, build_core_snapshot, expected_proxy_names, top_observed_correlations
 from stock_detail import build_stock_detail_analysis
 from fundamentals import (build_annual_forecast_series, build_fundamentals_cards,
-    build_fundamentals_summary, chart_axis_ticks, format_eps, format_financial_value,
-    format_jpy, format_yoy)
+    build_fundamentals_summary, chart_axis_ticks, format_company_forecast_summary,
+    format_eps, format_financial_value, format_forecast_period, format_jpy, format_yoy)
 from jquants_loader import JQuantsConfigurationError, fetch_financial_summaries, normalize_financial_summaries
 from decision_log_view import render_decision_entry, render_decision_history
 
@@ -531,13 +535,9 @@ def _render_fundamentals(detail: dict[str, object]) -> None:
         if forecast.empty:
             st.info("会社予想は取得できません。")
         else:
-            labels = {"forecast_revenue": "会社予想 売上高等", "forecast_net_income": "会社予想 純利益", "forecast_eps": "会社予想 EPS", "forecast_operating_profit": "会社予想 営業利益"}
-            for _, row in forecast.iterrows():
-                value = format_financial_value(row["value"], str(row["metric"]).replace("forecast_", ""), row.get("unit"))
-                st.write(f"**{labels.get(row['metric'], row['metric'])}**　{value}")
-            st.caption(f"対象年度: {forecast.iloc[0].get('fiscal_year')} ｜ 開示日: {forecast.iloc[0].get('disclosure_date')}。四半期実績の次期値としては扱いません。")
+            _render_current_company_forecast(forecast)
         st.divider()
-        _render_company_forecast_updates(data.get("forecast_updates"))
+        _render_company_forecast_updates(data.get("forecast_updates"), forecast)
     with tabs[2]:
         with st.expander("詳細データ・出所・導出方法を見る"):
             history = data["history"].copy()
@@ -548,16 +548,54 @@ def _render_fundamentals(detail: dict[str, object]) -> None:
             st.caption("is_derived=true は売上・利益の累計開示から安全に導出した単独四半期です。EPSは差分導出しません。")
 
 
-def _render_company_forecast_updates(updates: object) -> None:
-    st.markdown("**会社予想の変化**")
+def _render_current_company_forecast(forecast: pd.DataFrame) -> None:
+    first = forecast.iloc[0]
+    period = format_forecast_period(first.get("reference_period"), first.get("fiscal_year"))
+    st.markdown(f"**{period} 会社予想**")
+    labels = {
+        "forecast_revenue": "売上高等",
+        "forecast_operating_profit": "営業利益",
+        "forecast_net_income": "純利益",
+        "forecast_eps": "EPS",
+    }
+    order = tuple(labels)
+    rows = {
+        str(row["metric"]): row for _, row in forecast.iterrows()
+        if str(row["metric"]) in labels
+    }
+    for start in range(0, len(order), 2):
+        columns = st.columns(2)
+        for column, metric in zip(columns, order[start:start + 2]):
+            row = rows.get(metric)
+            with column:
+                value = "—" if row is None else format_company_forecast_summary(
+                    row.get("value"), metric.replace("forecast_", ""), row.get("unit")
+                )
+                st.metric(labels[metric], value)
+    st.caption(
+        f"開示日: {first.get('disclosure_date')}｜"
+        "四半期実績の次期値としては扱いません。"
+    )
+
+
+def _render_company_forecast_updates(updates: object, forecast: pd.DataFrame) -> None:
+    st.markdown("**前回からの変化**")
     st.caption("同じ対象年度・対象期・会計定義で比較できる前回開示との差です。Valuationではありません。")
-    if not isinstance(updates, dict) or updates.get("status") != "Available":
-        st.info("比較可能な同一年度の会社予想がありません。")
-        return
-    rows = list(updates.get("latest") or [])
-    if not rows:
-        st.info("比較可能な同一年度の会社予想がありません。")
-        return
+    selected = select_company_forecast_update_cohort(updates, forecast)
+    rows = list(selected.get("latest") or [])
+    if selected.get("status") != "Available" or not rows:
+        if isinstance(forecast, pd.DataFrame) and not forecast.empty:
+            first = forecast.iloc[0]
+            period = format_forecast_period(first.get("reference_period"), first.get("fiscal_year"))
+            st.info(f"{period}は比較可能な前回予想がありません。過年度の更新履歴は下で確認できます。")
+        else:
+            st.info("比較可能な同一年度の会社予想がありません。")
+    else:
+        _render_latest_forecast_changes(rows)
+    _render_forecast_history(updates)
+
+
+def _render_latest_forecast_changes(rows: list[dict[str, object]]) -> None:
     labels = {
         "forecast_revenue": "売上高等",
         "forecast_operating_profit": "営業利益",
@@ -577,23 +615,105 @@ def _render_company_forecast_updates(updates: object) -> None:
         change = _signed_financial_value(row.get("absolute_change"), metric, unit)
         pct = row.get("change_pct")
         suffix = _forecast_transition_text(str(row.get("transition_status")), change, pct)
-        st.markdown(f"**{labels.get(metric, metric)}**　{previous} → {current}")
+        st.markdown(f"**{labels.get(metric, metric)}**　前回 {previous} → 今回 {current}")
         st.caption(suffix)
-    history = updates.get("history")
+
+
+def _render_forecast_history(updates: object) -> None:
+    history = updates.get("history") if isinstance(updates, dict) else None
     if not isinstance(history, pd.DataFrame) or history.empty:
         return
     with st.expander("会社予想の更新履歴を見る"):
-        st.caption("対象年度が異なる予想は別グループとし、EPSは比較していません。")
-        for (year, reference), group in history.groupby(["fiscal_year", "reference_period"], dropna=False):
-            st.markdown(f"**{year}（期末 {reference}）**")
-            for metric, metric_group in group.groupby("metric"):
-                view = metric_group.copy()
-                view["前回"] = view.apply(lambda row: format_financial_value(row["previous_value"], str(metric).replace("forecast_", ""), row.get("unit")), axis=1)
-                view["現在"] = view.apply(lambda row: format_financial_value(row["current_value"], str(metric).replace("forecast_", ""), row.get("unit")), axis=1)
-                view["変化"] = view.apply(lambda row: _forecast_transition_text(str(row["transition_status"]), _signed_financial_value(row["absolute_change"], str(metric), row.get("unit")), row.get("change_pct")), axis=1)
-                view["開示"] = view["previous_disclosure_date"].astype(str) + " → " + view["latest_disclosure_date"].astype(str)
-                st.caption(labels.get(str(metric), str(metric)))
-                st.dataframe(view[["開示", "前回", "現在", "変化"]], hide_index=True, width="stretch")
+        st.caption("年度と指標を切り替えて、各開示日時点の離散的な会社予想を確認します。EPSは含みません。")
+        cohort_frame = (
+            history[list(COHORT_COLUMNS)]
+            .drop_duplicates()
+            .assign(_reference=lambda frame: pd.to_datetime(frame["reference_period"], errors="coerce"))
+            .sort_values("_reference", ascending=False)
+            .reset_index(drop=True)
+        )
+        options = list(cohort_frame.index)
+        ticker = str(cohort_frame.iloc[0].get("ticker", "stock")).replace(".", "_")
+        selected_index = st.selectbox(
+            "対象年度",
+            options,
+            format_func=lambda index: _forecast_cohort_label(cohort_frame.loc[index]),
+            key=f"forecast_history_cohort_{ticker}",
+        )
+        cohort = cohort_frame.loc[selected_index, list(COHORT_COLUMNS)].to_dict()
+        available_metrics = [
+            metric for metric in FORECAST_UPDATE_METRICS
+            if not build_forecast_history_observations(history, cohort, metric).empty
+        ]
+        labels = {
+            "forecast_revenue": "売上高等",
+            "forecast_operating_profit": "営業利益",
+            "forecast_net_income": "純利益",
+        }
+        if not available_metrics:
+            st.info("選択した年度には比較可能な更新履歴がありません。")
+            return
+        for tab, metric in zip(st.tabs([labels[metric] for metric in available_metrics]), available_metrics):
+            with tab:
+                observations = build_forecast_history_observations(history, cohort, metric)
+                _render_forecast_history_chart(observations, metric, cohort.get("unit"))
+                table = build_forecast_history_table(observations, metric, cohort.get("unit"))
+                st.dataframe(
+                    table,
+                    column_order=["開示日", "前回", "今回", "変化"],
+                    hide_index=True,
+                    width="stretch",
+                )
+
+
+def _forecast_cohort_label(row: pd.Series) -> str:
+    period = format_forecast_period(row.get("reference_period"), row.get("fiscal_year"))
+    scope = "連結" if bool(row.get("consolidated_flag")) else "単体"
+    return f"{period}｜{row.get('accounting_standard')}｜{scope}"
+
+
+def _render_forecast_history_chart(observations: pd.DataFrame, metric: str, unit: object) -> None:
+    if observations.empty:
+        st.info("比較可能な履歴がありません。")
+        return
+    plot = observations.copy()
+    plot["予想値"] = plot["forecast_value"].map(
+        lambda value: format_financial_value(value, metric.replace("forecast_", ""), unit)
+    )
+    plot["前回差"] = plot["absolute_change"].map(
+        lambda value: "—" if value is None or pd.isna(value) else _signed_financial_value(value, metric, unit)
+    )
+    plot["変化率"] = plot["change_pct"].map(
+        lambda value: "—" if value is None or pd.isna(value) else f"{float(value):+.1f}%"
+    )
+    figure = go.Figure(go.Bar(
+        x=plot["disclosure_date"],
+        y=plot["forecast_value"],
+        marker_color="#4da3ff",
+        customdata=plot[["予想値", "前回差", "変化率"]],
+        hovertemplate="開示日 %{x}<br>予想値 %{customdata[0]}<br>前回差 %{customdata[1]}<br>変化率 %{customdata[2]}<extra></extra>",
+    ))
+    ticks = chart_axis_ticks(plot["forecast_value"], metric.replace("forecast_", ""), unit)
+    figure.update_yaxes(tickvals=ticks["tickvals"], ticktext=ticks["ticktext"])
+    figure.update_layout(height=280, margin=dict(l=8, r=8, t=12, b=8), showlegend=False)
+    st.plotly_chart(figure, width="stretch", config=make_chart_static(figure))
+
+
+def build_forecast_history_table(
+    observations: pd.DataFrame, metric: str, unit: object,
+) -> pd.DataFrame:
+    rows = []
+    for _, row in observations.iterrows():
+        previous = row.get("previous_value")
+        change = row.get("absolute_change")
+        pct = row.get("change_pct")
+        rows.append({
+            "開示日": row.get("disclosure_date"),
+            "前回": "—" if previous is None or pd.isna(previous) else format_financial_value(previous, metric.replace("forecast_", ""), unit),
+            "今回": format_financial_value(row.get("forecast_value"), metric.replace("forecast_", ""), unit),
+            "変化": "—" if change is None or pd.isna(change) else _forecast_transition_text(str(row.get("transition_status")), _signed_financial_value(change, metric, unit), pct),
+        })
+    return pd.DataFrame(rows, columns=["開示日", "前回", "今回", "変化"])
 
 
 def _forecast_transition_text(status: str, change: str, change_pct: object) -> str:

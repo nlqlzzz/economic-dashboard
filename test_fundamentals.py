@@ -1,7 +1,8 @@
 import unittest
 import pandas as pd
 from fundamentals import (build_annual_forecast_series, build_fundamentals_cards,
-                          build_fundamentals_summary, chart_axis_ticks, format_eps,
+                          build_fundamentals_summary, chart_axis_ticks,
+                          format_company_forecast_summary, format_eps,
                           format_financial_value, format_jpy, format_yoy)
 
 
@@ -35,6 +36,10 @@ class FundamentalsTest(unittest.TestCase):
         self.assertEqual(format_eps(62.0), "62円")
         self.assertEqual(format_yoy(1.9), "前年比 +1.9%")
         self.assertEqual(format_financial_value(12_597_348_000_000, "revenue", "JPY"), "12.6兆円")
+
+    def test_company_forecast_summary_keeps_one_trillion_decimal(self):
+        self.assertEqual(format_company_forecast_summary(3_000_000_000_000, "net_income", "JPY"), "3.0兆円")
+        self.assertEqual(format_company_forecast_summary(3_500_000_000_000, "net_income", "JPY"), "3.5兆円")
 
     def test_mobile_card_payload_is_compact(self):
         cards = build_fundamentals_cards(build_fundamentals_summary(records(), "自動車"))

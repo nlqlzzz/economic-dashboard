@@ -7,6 +7,7 @@ from japan_equity_view import (
     JAPAN_SELECTED_TICKER_KEY,
     JAPAN_STOCK_SECTION_ORDER,
     build_price_reaction_rows,
+    build_forecast_history_table,
     build_risk_items,
     build_stock_status_items,
     core20_stock_options,
@@ -55,6 +56,59 @@ def _detail(*, price_available: bool = True, fundamentals_available: bool = True
 
 
 class JapanEquityViewTest(unittest.TestCase):
+    def test_forecast_history_table_uses_fixed_columns_and_konkai_label(self) -> None:
+        observations = pd.DataFrame([{
+            "disclosure_date": "2026-05-08", "forecast_value": 3_000_000_000_000,
+            "previous_value": None, "absolute_change": None, "change_pct": None,
+            "transition_status": None,
+        }, {
+            "disclosure_date": "2026-08-07", "forecast_value": 3_500_000_000_000,
+            "previous_value": 3_000_000_000_000, "absolute_change": 500_000_000_000,
+            "change_pct": 16.6667, "transition_status": "increase",
+        }])
+        table = build_forecast_history_table(observations, "forecast_net_income", "JPY")
+        self.assertEqual(list(table.columns), ["開示日", "前回", "今回", "変化"])
+        self.assertNotIn("現在", table.columns)
+
+    def test_company_forecast_ui_renders_cards_changes_and_history(self) -> None:
+        script = '''
+import pandas as pd
+import japan_equity_view as view
+from forecast_updates import build_company_forecast_updates
+
+base = {
+    "ticker": "7203.T", "fiscal_year": "2027", "reference_period": "2027-03-31",
+    "accounting_standard": "IFRS", "consolidated_flag": True,
+    "currency": "JPY", "unit": "JPY",
+}
+current = pd.DataFrame([
+    {**base, "metric": "forecast_revenue", "value": 51_000_000_000_000, "disclosure_date": "2026-08-07"},
+    {**base, "metric": "forecast_operating_profit", "value": 3_800_000_000_000, "disclosure_date": "2026-08-07"},
+    {**base, "metric": "forecast_net_income", "value": 3_100_000_000_000, "disclosure_date": "2026-08-07"},
+    {**base, "metric": "forecast_eps", "value": 251.2, "disclosure_date": "2026-08-07"},
+])
+history = []
+for metric, old, new in (
+    ("forecast_revenue", 48_000_000_000_000, 51_000_000_000_000),
+    ("forecast_operating_profit", 3_400_000_000_000, 3_800_000_000_000),
+    ("forecast_net_income", 2_930_000_000_000, 3_100_000_000_000),
+):
+    history.extend([
+        {**base, "metric": metric, "value": old, "disclosure_date": "2026-05-08"},
+        {**base, "metric": metric, "value": new, "disclosure_date": "2026-08-07"},
+    ])
+updates = build_company_forecast_updates(pd.DataFrame(history))
+view._render_current_company_forecast(current)
+view._render_company_forecast_updates(updates, current)
+'''
+        app = AppTest.from_string(script, default_timeout=30).run()
+        self.assertFalse(app.exception)
+        self.assertEqual(
+            [metric.label for metric in app.metric],
+            ["売上高等", "営業利益", "純利益", "EPS"],
+        )
+        self.assertTrue(any("今回" in item.value for item in app.markdown))
+        self.assertTrue(app.dataframe)
     def test_primary_flow_has_requested_order(self) -> None:
         self.assertEqual(
             JAPAN_STOCK_SECTION_ORDER,
