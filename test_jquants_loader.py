@@ -74,6 +74,21 @@ class JQuantsNormalizationTest(unittest.TestCase):
         self.assertEqual(row["reference_period"], "2027-03-31")
         self.assertEqual(row["fiscal_year"], "2027")
 
+    def test_next_fiscal_year_net_income_uses_official_nx_fnp_field(self) -> None:
+        raw = _raw_rows().iloc[-1:].copy()
+        raw["NxtFYSt"] = "2026-04-01"
+        raw["NxtFYEn"] = "2027-03-31"
+        raw["NxFNp"] = 3_400_000_000
+        result = normalize_financial_summaries(
+            raw, ticker_by_code={"7203": "7203.T"}
+        )
+        row = result[result.source_field.eq("NxFNp")].iloc[0]
+        self.assertEqual(row["metric"], "forecast_net_income")
+        self.assertEqual(row["forecast_scope"], "next_fy")
+        self.assertEqual(row["source_field"], "NxFNp")
+        self.assertEqual(row["reference_period"], "2027-03-31")
+        self.assertEqual(row["fiscal_year"], "2027")
+
     def test_next_forecast_does_not_guess_missing_target_period(self) -> None:
         raw = _raw_rows().iloc[-1:].copy()
         raw["NxFEPS"] = 80.0

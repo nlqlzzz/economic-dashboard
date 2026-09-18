@@ -9,6 +9,7 @@ from forecast_updates import (
     build_company_forecast_updates,
     forecast_update_snapshot,
 )
+from jquants_loader import normalize_financial_summaries
 
 
 def _row(
@@ -79,6 +80,39 @@ class CompanyForecastUpdateTest(unittest.TestCase):
         ]
         result = build_company_forecast_updates(pd.DataFrame(rows))
         update = result["latest"][0]
+        self.assertEqual(update["previous_forecast_scope"], "next_fy")
+        self.assertEqual(update["current_forecast_scope"], "current_fy")
+        self.assertEqual(update["absolute_change"], 20)
+
+    def test_raw_nx_fnp_connects_to_later_current_fnp(self) -> None:
+        raw = pd.DataFrame([
+            {
+                "Code": "72030", "DiscDate": "2026-05-08",
+                "DocType": "FYFinancialStatements_Consolidated_IFRS",
+                "CurPerType": "FY", "CurPerSt": "2025-04-01",
+                "CurPerEn": "2026-03-31", "CurFYSt": "2025-04-01",
+                "CurFYEn": "2026-03-31", "NxtFYSt": "2026-04-01",
+                "NxtFYEn": "2027-03-31", "NxFNp": 320,
+            },
+            {
+                "Code": "72030", "DiscDate": "2026-08-07",
+                "DocType": "1QFinancialStatements_Consolidated_IFRS",
+                "CurPerType": "1Q", "CurPerSt": "2026-04-01",
+                "CurPerEn": "2026-06-30", "CurFYSt": "2026-04-01",
+                "CurFYEn": "2027-03-31", "FNP": 340,
+            },
+        ])
+        normalized = normalize_financial_summaries(
+            raw, ticker_by_code={"7203": "7203.T"}
+        )
+        result = build_company_forecast_updates(normalized)
+        self.assertEqual(result["status"], "Available")
+        update = result["latest"][0]
+        self.assertEqual(update["metric"], "forecast_net_income")
+        self.assertEqual(update["fiscal_year"], "2027")
+        self.assertEqual(update["reference_period"], "2027-03-31")
+        self.assertEqual(update["previous_source_field"], "NxFNp")
+        self.assertEqual(update["current_source_field"], "FNP")
         self.assertEqual(update["previous_forecast_scope"], "next_fy")
         self.assertEqual(update["current_forecast_scope"], "current_fy")
         self.assertEqual(update["absolute_change"], 20)

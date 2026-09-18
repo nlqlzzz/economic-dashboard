@@ -198,7 +198,7 @@ def normalize_financial_summaries(
             ("FEPS", "forecast_eps", "current_fy"),
             ("NxFSales", "forecast_revenue", "next_fy"),
             ("NxFOP", "forecast_operating_profit", "next_fy"),
-            ("NxFNP", "forecast_net_income", "next_fy"),
+            ("NxFNp", "forecast_net_income", "next_fy"),
             ("NxFEPS", "forecast_eps", "next_fy"),
         )
         for field, metric, forecast_scope in fields:
