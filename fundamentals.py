@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from forecast_updates import build_company_forecast_updates
 from jquants_loader import add_fiscal_yoy, derive_standalone_quarters
 
 OPERATING_NOT_APPLICABLE = {"銀行", "保険"}
@@ -22,10 +23,18 @@ def build_fundamentals_summary(records: pd.DataFrame, sector: str) -> dict[str, 
     history_count = {metric: int(counts.get(metric, 0)) for metric in ACTUAL_METRICS}
     annual_history = add_fiscal_yoy(actual[actual["fiscal_quarter"].eq("FY")].copy())
     forecast, forecast_status = _current_forecast_cohort(records, latest_period)
+    forecast_updates = build_company_forecast_updates(records)
+    forecast_update_records = records[
+        records["metric"].isin((
+            "forecast_revenue", "forecast_operating_profit", "forecast_net_income"
+        ))
+    ].copy()
     momentum, reason = _assess_momentum(latest, sector)
     return {
         "status": "Available", "latest": latest, "latest_period": latest_period,
         "history": history, "annual_history": annual_history, "forecast": forecast,
+        "forecast_updates": forecast_updates,
+        "forecast_update_records": forecast_update_records,
         "forecast_status": forecast_status, "momentum": momentum,
         "history_count": history_count,
         "history_status": "Full history" if min(history_count[x] for x in ("revenue", "net_income")) >= 8 else "History Limited",

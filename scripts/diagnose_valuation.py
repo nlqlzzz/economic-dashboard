@@ -154,7 +154,7 @@ def build_live_report(
         if field in raw_records else 0
         for field in (
             "BPS", "NCBPS", "Eq", "NCEq", "ShOutFY", "AvgSh",
-            "NxtFYSt", "NxtFYEn", "NxFSales", "NxFOP", "NxFNP", "NxFEPS",
+            "NxtFYSt", "NxtFYEn", "NxFSales", "NxFOP", "NxFNp", "NxFEPS",
         )
     }
     return {

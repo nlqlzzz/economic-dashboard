@@ -11,13 +11,14 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from forecast_updates import build_company_forecast_updates, forecast_update_snapshot
 from price_quality import inspect_price_series
 
 
 TOKYO = ZoneInfo("Asia/Tokyo")
 TABLE_NAME = "investment_decisions"
 SCHEMA_VERSION = 1
-SNAPSHOT_SCHEMA_VERSION = 1
+SNAPSHOT_SCHEMA_VERSION = 2
 BENCHMARK_TICKER = "1306.T"
 DECISION_ACTIONS = ("買う", "見送る", "保有継続", "売却")
 DECISION_MODES = ("実判断", "仮想判断")
@@ -153,6 +154,13 @@ def build_decision_snapshot(
     latest = _mapping(fundamentals.get("latest_period"))
     exposure = _mapping(detail.get("market_exposure"))
     forecasts = _forecast_snapshot(fundamentals.get("forecast"))
+    update_records = fundamentals.get("forecast_update_records")
+    if isinstance(update_records, pd.DataFrame):
+        forecast_updates = build_company_forecast_updates(
+            update_records, as_of=captured
+        )
+    else:
+        forecast_updates = fundamentals.get("forecast_updates")
     drivers: list[dict[str, object]] = []
     for row in list(detail.get("primary_drivers") or []):
         item = _mapping(row)
@@ -184,6 +192,9 @@ def build_decision_snapshot(
             "momentum": fundamentals.get("momentum", "Unavailable"),
             "forecast": forecasts,
         },
+        "company_forecast_update": forecast_update_snapshot(
+            forecast_updates
+        ),
         "valuation": {"status": "unavailable", "reason": "比較条件を満たす評価指標は未実装"},
         "risk": {
             "investment_checks": list(risk_items.get("investment_checks") or []),
