@@ -1,16 +1,18 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
+import requests
 
 from global_semiconductor_demand import SEMICONDUCTOR_DATA_COLUMNS
 from taiwan_export_orders_archive import (
     TaiwanArchiveRelease,
+    TaiwanArchiveHttpClient,
     discover_taiwan_export_order_releases,
     parse_taiwan_archive_article,
     parse_taiwan_export_orders_archive_text,
 )
-from data_loader import load_taiwan_semiconductor_orders_archive
+from data_loader import _load_taiwan_semiconductor_orders_archive
 
 
 def release_text(
@@ -124,17 +126,19 @@ class TaiwanArchiveParserTest(unittest.TestCase):
 
 
 class TaiwanArchiveLoaderTest(unittest.TestCase):
-    @patch("data_loader.time.sleep")
     @patch("data_loader.parse_taiwan_export_orders_archive_attachment")
     @patch("data_loader.parse_taiwan_archive_article")
     @patch("data_loader.discover_taiwan_export_order_releases")
-    @patch("data_loader._download_bytes")
-    @patch("data_loader._download_text")
     def test_loader_is_independent_and_reports_coverage(
-        self, download_text, download_bytes, discover, parse_article, parse_attachment, _sleep
+        self, discover, parse_article, parse_attachment
     ) -> None:
-        download_text.side_effect = ["listing", "article-a", "article-b"]
-        download_bytes.side_effect = [b"file-a", b"file-b"]
+        client = Mock(spec=TaiwanArchiveHttpClient)
+        client.minimum_interval_seconds = 3.0
+        client.get_text.side_effect = ["listing", "article-a", "article-b"]
+        client.get_attachment.side_effect = [
+            (b"file-a", "application/pdf"),
+            (b"file-b", "application/pdf"),
+        ]
         discover.return_value = [
             TaiwanArchiveRelease(pd.Timestamp("2021-01-01"), "https://official/a", "110年1月"),
             TaiwanArchiveRelease(pd.Timestamp("2021-03-01"), "https://official/b", "110年3月"),
@@ -156,14 +160,120 @@ class TaiwanArchiveLoaderTest(unittest.TestCase):
             return frame
 
         parse_attachment.side_effect = [parsed("2021-01-01", "aaa"), parsed("2021-03-01", "bbb")]
-        frame = load_taiwan_semiconductor_orders_archive.__wrapped__(
-            start_period="2021-01", end_period="2021-03"
+        frame = _load_taiwan_semiconductor_orders_archive(
+            start_period="2021-01", end_period="2021-03", http_client=client
         )
         self.assertEqual(frame.attrs["expected_months"], 3)
         self.assertEqual(frame.attrs["discovered_months"], 2)
         self.assertEqual(frame.attrs["missing_discovery_months"], ["2021-02"])
         self.assertEqual(frame.attrs["attachment_hashes"], {"2021-01": "aaa", "2021-03": "bbb"})
         self.assertEqual(len(frame), 4)
+
+    @patch("data_loader.parse_taiwan_export_orders_archive_attachment")
+    @patch("data_loader.parse_taiwan_archive_article")
+    @patch("data_loader.discover_taiwan_export_order_releases")
+    def test_diagnostic_fetches_only_requested_representative_months(
+        self, discover, parse_article, parse_attachment
+    ) -> None:
+        client = Mock(spec=TaiwanArchiveHttpClient)
+        client.minimum_interval_seconds = 3.0
+        client.get_text.side_effect = ["listing", "article-2021", "article-2025"]
+        client.get_attachment.side_effect = [
+            (b"file-2021", "application/pdf"),
+            (b"file-2025", "application/pdf"),
+        ]
+        discover.return_value = [
+            TaiwanArchiveRelease(pd.Timestamp("2021-01-01"), "https://official/2021", "110年1月"),
+            TaiwanArchiveRelease(pd.Timestamp("2021-02-01"), "https://official/not-requested", "110年2月"),
+            TaiwanArchiveRelease(pd.Timestamp("2025-01-01"), "https://official/2025", "114年1月"),
+        ]
+        parse_article.side_effect = [
+            (pd.Timestamp("2021-01-01"), pd.Timestamp("2021-02-24"), "https://official/2021.pdf"),
+            (pd.Timestamp("2025-01-01"), pd.Timestamp("2025-02-20 16:00"), "https://official/2025.pdf"),
+        ]
+
+        def parsed(period: str, digest: str) -> pd.DataFrame:
+            frame = parse_taiwan_export_orders_archive_text(
+                release_text("110年1月", "110.2.24", "150.9", "增", "55.6", "169.3", "增", "64.3"),
+                "https://official/file.pdf", pd.Timestamp("2026-09-19"),
+                reference_period=pd.Timestamp(period), release_date=pd.Timestamp(period),
+            )
+            frame.attrs["attachment_sha256"] = digest
+            return frame
+
+        parse_attachment.side_effect = [parsed("2021-01-01", "a"), parsed("2025-01-01", "b")]
+        frame = _load_taiwan_semiconductor_orders_archive(
+            start_period="2021-01", end_period="2025-01",
+            reference_periods=(pd.Timestamp("2021-01-01"), pd.Timestamp("2025-01-01")),
+            http_client=client,
+        )
+        requested_urls = [call.args[0] for call in client.get_text.call_args_list]
+        self.assertNotIn("https://official/not-requested", requested_urls)
+        self.assertEqual(frame.attrs["selected_reference_periods"], ["2021-01", "2025-01"])
+
+
+class TaiwanArchiveHttpClientTest(unittest.TestCase):
+    @staticmethod
+    def response(status: int, content: bytes = b"ok", **headers: str) -> requests.Response:
+        response = requests.Response()
+        response.status_code = status
+        response._content = content
+        response.headers.update(headers)
+        response.url = "https://official.example/file"
+        return response
+
+    def test_enforces_interval_between_every_request(self) -> None:
+        session = Mock()
+        session.get.side_effect = [self.response(200), self.response(200)]
+        sleeper = Mock()
+        clock = Mock(side_effect=[10.0, 11.0, 14.0])
+        client = TaiwanArchiveHttpClient(
+            session=session, sleeper=sleeper, clock=clock, minimum_interval_seconds=3.0
+        )
+        client.get_text("https://official.example/listing")
+        client.get_text("https://official.example/article")
+        sleeper.assert_called_once_with(2.0)
+
+    def test_429_honors_retry_after(self) -> None:
+        session = Mock()
+        session.get.side_effect = [
+            self.response(429, b"<html>rate limited</html>", **{"Retry-After": "7"}),
+            self.response(200, b"ok"),
+        ]
+        sleeper = Mock()
+        client = TaiwanArchiveHttpClient(
+            session=session, sleeper=sleeper, clock=lambda: 0.0,
+            minimum_interval_seconds=0,
+        )
+        self.assertEqual(client.get_text("https://official.example"), "ok")
+        sleeper.assert_called_once_with(7.0)
+
+    def test_429_uses_bounded_backoff_and_never_parses_html(self) -> None:
+        session = Mock()
+        session.get.side_effect = [
+            self.response(429, b"<html>rate limited</html>") for _ in range(4)
+        ]
+        sleeper = Mock()
+        client = TaiwanArchiveHttpClient(
+            session=session, sleeper=sleeper, clock=lambda: 0.0,
+            minimum_interval_seconds=0,
+        )
+        with self.assertRaises(requests.HTTPError):
+            client.get_attachment("https://official.example/file.pdf")
+        self.assertEqual(session.get.call_count, 4)
+        self.assertEqual([call.args[0] for call in sleeper.call_args_list], [5.0, 15.0, 30.0])
+
+    def test_successful_html_error_page_is_not_an_attachment(self) -> None:
+        session = Mock()
+        session.get.return_value = self.response(
+            200, b"<!DOCTYPE html><title>error</title>", **{"Content-Type": "text/html"}
+        )
+        client = TaiwanArchiveHttpClient(
+            session=session, sleeper=Mock(), clock=lambda: 0.0,
+            minimum_interval_seconds=0,
+        )
+        with self.assertRaisesRegex(ValueError, "PDF/XLSX"):
+            client.get_attachment("https://official.example/file.pdf")
 
 
 if __name__ == "__main__":

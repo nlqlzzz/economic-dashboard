@@ -6,10 +6,12 @@ from html import unescape
 from html.parser import HTMLParser
 from io import BytesIO
 import re
+import time
 import unicodedata
 from urllib.parse import urljoin
 
 import pandas as pd
+import requests
 
 from global_semiconductor_demand import (
     SEMICONDUCTOR_DATA_COLUMNS,
@@ -22,6 +24,14 @@ TAIWAN_EXPORT_ORDERS_ARCHIVE_URL = (
     "https://www.moea.gov.tw/Mns/dos/content/ContentLink.aspx?menu_id=9423"
 )
 TAIWAN_ARCHIVE_DEFAULT_START = pd.Timestamp("2021-01-01")
+TAIWAN_ARCHIVE_MIN_REQUEST_INTERVAL_SECONDS = 3.0
+TAIWAN_ARCHIVE_429_BACKOFF_SECONDS = (5.0, 15.0, 30.0)
+TAIWAN_ARCHIVE_REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (compatible; economic-dashboard/1.0; "
+        "+https://github.com/nlqlzzz/economic-dashboard)"
+    )
+}
 
 
 @dataclass(frozen=True)
@@ -29,6 +39,74 @@ class TaiwanArchiveRelease:
     reference_period: pd.Timestamp
     article_url: str
     title: str
+
+
+class TaiwanArchiveHttpClient:
+    """台湾archiveだけを低速取得し、429をbounded retryする。"""
+
+    def __init__(
+        self,
+        *,
+        minimum_interval_seconds: float = TAIWAN_ARCHIVE_MIN_REQUEST_INTERVAL_SECONDS,
+        backoff_seconds: tuple[float, ...] = TAIWAN_ARCHIVE_429_BACKOFF_SECONDS,
+        session: requests.Session | None = None,
+        sleeper=time.sleep,
+        clock=time.monotonic,
+    ) -> None:
+        self.minimum_interval_seconds = minimum_interval_seconds
+        self.backoff_seconds = backoff_seconds
+        self.session = session or requests.Session()
+        self.sleeper = sleeper
+        self.clock = clock
+        self._last_request_at: float | None = None
+
+    def get_text(self, url: str) -> str:
+        response = self._request(url)
+        if not response.text.strip():
+            raise ValueError(f"台湾archive公式ページが空です: {url}")
+        return response.text
+
+    def get_attachment(self, url: str) -> tuple[bytes, str]:
+        response = self._request(url)
+        content = response.content
+        content_type = response.headers.get("Content-Type", "unknown")
+        if not (content.startswith(b"%PDF") or content.startswith(b"PK")):
+            raise ValueError(
+                "台湾archive添付がPDF/XLSXではありません"
+                f"（Content-Type={content_type}）。"
+            )
+        return content, content_type
+
+    def _request(self, url: str) -> requests.Response:
+        maximum_attempts = 1 + len(self.backoff_seconds)
+        for attempt in range(maximum_attempts):
+            self._wait_for_request_slot()
+            response = self.session.get(
+                url,
+                headers=TAIWAN_ARCHIVE_REQUEST_HEADERS,
+                timeout=30,
+            )
+            self._last_request_at = self.clock()
+            if response.status_code != 429:
+                response.raise_for_status()
+                return response
+            if attempt == maximum_attempts - 1:
+                response.raise_for_status()
+            retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
+            self.sleeper(
+                retry_after
+                if retry_after is not None
+                else self.backoff_seconds[attempt]
+            )
+        raise RuntimeError("台湾archiveの429 retryが予期せず終了しました。")
+
+    def _wait_for_request_slot(self) -> None:
+        if self._last_request_at is None:
+            return
+        elapsed = self.clock() - self._last_request_at
+        remaining = self.minimum_interval_seconds - elapsed
+        if remaining > 0:
+            self.sleeper(remaining)
 
 
 class _LinkParser(HTMLParser):
@@ -301,3 +379,13 @@ def _html_to_text(html: str) -> str:
 def _compact_text(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", unescape(str(value)))
     return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        return None
+    return max(0.0, seconds)
