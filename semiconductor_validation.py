@@ -6,6 +6,10 @@ from validation_timing import condition_onsets, evaluate_release_return, exclusi
 
 
 RETURN_HORIZONS = {1: "1か月後", 3: "3か月後", 6: "6か月後"}
+STRICT_TAIWAN_SERIES = {
+    "taiwan_electronic_export_orders",
+    "taiwan_information_communication_export_orders",
+}
 
 
 def calculate_market_momentum(prices: pd.Series) -> dict[str, object]:
@@ -69,6 +73,7 @@ def build_overseas_validation_signals(
     selected["yoy"] = pd.to_numeric(selected["yoy"], errors="coerce")
     selected = selected.dropna(subset=["yoy", "reference_period"])
     if strict:
+        selected = _filter_strict_taiwan_archive(selected)
         selected = selected.dropna(subset=["release_date"])
         selected["available_at"] = pd.to_datetime(selected["release_date"])
         method = "official_release_date"
@@ -87,7 +92,36 @@ def build_overseas_validation_signals(
     pivot.attrs["publication_time_status"] = "unknown"
     pivot.attrs["revision_history_status"] = "not_verified"
     pivot.attrs["availability_method"] = method
+    taiwan = selected[selected["series_id"].isin(STRICT_TAIWAN_SERIES)]
+    korea = selected[selected["series_id"].astype(str).str.startswith("korea_")]
+    pivot.attrs["taiwan_release_range"] = _release_range(taiwan)
+    pivot.attrs["korea_release_range"] = _release_range(korea)
     return pivot
+
+
+def _filter_strict_taiwan_archive(frame: pd.DataFrame) -> pd.DataFrame:
+    taiwan = frame[frame["series_id"].astype(str).str.startswith("taiwan_")].copy()
+    other = frame[~frame["series_id"].astype(str).str.startswith("taiwan_")].copy()
+    if taiwan.empty:
+        return other
+    valid = (
+        taiwan["series_id"].isin(STRICT_TAIWAN_SERIES)
+        & taiwan["release_date"].notna()
+        & taiwan["publication_stage"].eq("official_monthly_release")
+        & taiwan["data_vintage"].eq("as_published_monthly_release")
+        & ~taiwan["yoy_is_derived"].fillna(True)
+        & ~taiwan["is_derived"].fillna(True)
+        & ~taiwan["is_partial_period"].fillna(True)
+    )
+    taiwan = taiwan[valid]
+    complete = taiwan.groupby("reference_period")["series_id"].agg(lambda values: set(values))
+    complete_months = complete[complete.map(lambda values: values == STRICT_TAIWAN_SERIES)].index
+    return pd.concat([other, taiwan[taiwan["reference_period"].isin(complete_months)]], ignore_index=True)
+
+
+def _release_range(frame: pd.DataFrame) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    dates = pd.to_datetime(frame.get("release_date"), errors="coerce").dropna()
+    return (None, None) if dates.empty else (dates.min(), dates.max())
 
 
 def add_global_condition_signals(

@@ -5,6 +5,8 @@ from hashlib import sha256
 from html import unescape
 from html.parser import HTMLParser
 from io import BytesIO
+from pathlib import Path
+import json
 import re
 import time
 import unicodedata
@@ -41,6 +43,9 @@ TAIWAN_ARCHIVE_REQUEST_HEADERS = {
 TAIWAN_ARCHIVE_VERIFIED_LEGACY_RELEASE_DATES = {
     pd.Timestamp("2021-01-01"): pd.Timestamp("2021-02-24"),
 }
+TAIWAN_ARCHIVE_SNAPSHOT_PATH = Path(__file__).resolve().parent / "data" / "taiwan_export_orders_archive.csv"
+TAIWAN_ARCHIVE_MANIFEST_PATH = Path(__file__).resolve().parent / "data" / "taiwan_export_orders_archive_manifest.json"
+TAIWAN_ARCHIVE_SERIES_IDS = {series_id for series_id, _ in TAIWAN_SERIES.values()}
 
 
 @dataclass(frozen=True)
@@ -418,6 +423,68 @@ def empty_taiwan_archive_frame() -> pd.DataFrame:
     frame = empty_semiconductor_frame()
     frame.attrs.update({"failures": [], "attachment_hashes": {}})
     return frame
+
+
+def load_taiwan_archive_snapshot(
+    path: str | Path = TAIWAN_ARCHIVE_SNAPSHOT_PATH,
+) -> pd.DataFrame:
+    """Read the committed point-in-time snapshot without network access."""
+    source = Path(path)
+    if not source.exists():
+        raise ValueError(f"台湾archive snapshotがありません: {source}")
+    frame = pd.read_csv(source)
+    if tuple(frame.columns) != SEMICONDUCTOR_DATA_COLUMNS:
+        raise ValueError("台湾archive snapshotの列構造が想定と一致しません。")
+    for column in ("reference_period", "release_date", "period_start", "period_end", "fetched_at"):
+        frame[column] = pd.to_datetime(frame[column], errors="coerce")
+    for column in ("value", "yoy", "working_days"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    for column in ("is_partial_period", "is_derived", "yoy_is_derived"):
+        frame[column] = frame[column].map(_parse_snapshot_boolean)
+    validate_taiwan_archive_snapshot(frame)
+    return frame.sort_values(["reference_period", "series_id"]).reset_index(drop=True)
+
+
+def validate_taiwan_archive_snapshot(frame: pd.DataFrame) -> None:
+    """Fail closed when a committed strict snapshot loses PIT provenance."""
+    if tuple(frame.columns) != SEMICONDUCTOR_DATA_COLUMNS:
+        raise ValueError("台湾archive snapshotのschemaが不正です。")
+    if frame.empty:
+        raise ValueError("台湾archive snapshotが空です。")
+    if set(frame["series_id"]) != TAIWAN_ARCHIVE_SERIES_IDS or set(frame["region"]) != {"Taiwan"}:
+        raise ValueError("台湾archive snapshotに対象外系列があります。")
+    required = ["reference_period", "release_date", "value", "yoy", "source_url"]
+    if frame[required].isna().any().any() or frame["source_url"].astype(str).str.strip().eq("").any():
+        raise ValueError("台湾archive snapshotにstrict必須値の欠損があります。")
+    if not frame["publication_stage"].eq("official_monthly_release").all():
+        raise ValueError("台湾archive snapshotのpublication_stageが不正です。")
+    if not frame["data_vintage"].eq("as_published_monthly_release").all():
+        raise ValueError("台湾archive snapshotのdata_vintageが不正です。")
+    if frame["is_derived"].any() or frame["is_partial_period"].any() or frame["yoy_is_derived"].any():
+        raise ValueError("台湾archive snapshotに派生値または部分期間があります。")
+    if frame.duplicated(["reference_period", "series_id"]).any():
+        raise ValueError("台湾archive snapshotに対象月・系列の重複があります。")
+    per_month = frame.groupby("reference_period")["series_id"].agg(lambda values: set(values))
+    if not per_month.map(lambda values: values == TAIWAN_ARCHIVE_SERIES_IDS).all():
+        raise ValueError("台湾archive snapshotに2系列が揃わない月があります。")
+
+
+def load_taiwan_archive_manifest(
+    path: str | Path = TAIWAN_ARCHIVE_MANIFEST_PATH,
+) -> dict[str, object]:
+    source = Path(path)
+    if not source.exists():
+        raise ValueError(f"台湾archive manifestがありません: {source}")
+    return json.loads(source.read_text(encoding="utf-8"))
+
+
+def _parse_snapshot_boolean(value: object) -> bool:
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1"}:
+        return True
+    if normalized in {"false", "0"}:
+        return False
+    raise ValueError(f"台湾archive snapshotのboolean値が不正です: {value}")
 
 
 def _spreadsheet_to_text(content: bytes) -> str:

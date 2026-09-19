@@ -33,6 +33,7 @@ from taiwan_export_orders_archive import (
     empty_taiwan_archive_frame,
     parse_taiwan_archive_article,
     parse_taiwan_export_orders_archive_attachment,
+    load_taiwan_archive_snapshot,
 )
 
 
@@ -389,6 +390,12 @@ def load_taiwan_semiconductor_orders_archive(
         start_period=start_period,
         end_period=end_period,
     )
+
+
+@st.cache_data(show_spinner=False)
+def load_taiwan_semiconductor_orders_archive_snapshot() -> pd.DataFrame:
+    """通常アプリ用。commit済みarchive snapshotをnetworkなしで読む。"""
+    return load_taiwan_archive_snapshot()
 
 
 def diagnose_taiwan_semiconductor_orders_archive(

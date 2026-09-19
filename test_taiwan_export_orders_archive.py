@@ -1,5 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 import requests
@@ -12,6 +14,8 @@ from taiwan_export_orders_archive import (
     discover_taiwan_export_order_releases,
     parse_taiwan_archive_article,
     parse_taiwan_news_archive_search_result,
+    load_taiwan_archive_snapshot,
+    validate_taiwan_archive_snapshot,
     parse_taiwan_export_orders_archive_text,
 )
 from data_loader import _load_taiwan_semiconductor_orders_archive
@@ -155,6 +159,41 @@ class TaiwanArchiveParserTest(unittest.TestCase):
             parse_taiwan_export_orders_archive_text(
                 text, "https://official.example/broken.pdf", pd.Timestamp("2026-09-19")
             )
+
+
+class TaiwanArchiveSnapshotTest(unittest.TestCase):
+    def snapshot(self) -> pd.DataFrame:
+        first = parse_taiwan_export_orders_archive_text(
+            release_text("110年9月", "110.10.20 16:00", "150.0", "增", "5.0", "170.0", "增", "6.0"),
+            "https://official.example/2021-09.pdf", pd.Timestamp("2026-09-19"),
+        )
+        revised = parse_taiwan_export_orders_archive_text(
+            release_text("114年1月", "114.2.20 16:00", "120.6", "減", "13.3", "177.1", "增", "1.5"),
+            "https://official.example/2025-01.pdf", pd.Timestamp("2026-09-19"),
+        )
+        return pd.concat([first, revised], ignore_index=True)
+
+    def test_snapshot_round_trip_preserves_strict_vintage(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "snapshot.csv"
+            self.snapshot().to_csv(path, index=False)
+            frame = load_taiwan_archive_snapshot(path)
+        self.assertEqual(tuple(frame.columns), SEMICONDUCTOR_DATA_COLUMNS)
+        self.assertEqual(len(frame), 4)
+        value = frame.loc[
+            frame["series_id"].eq("taiwan_information_communication_export_orders")
+            & frame["reference_period"].eq(pd.Timestamp("2025-01-01")), "value"
+        ].item()
+        self.assertEqual(value, 12_060)
+        self.assertFalse(frame["yoy_is_derived"].any())
+        self.assertTrue(frame["release_date"].notna().all())
+
+    def test_snapshot_rejects_duplicate_and_incomplete_month(self) -> None:
+        frame = self.snapshot()
+        with self.assertRaisesRegex(ValueError, "重複"):
+            validate_taiwan_archive_snapshot(pd.concat([frame, frame.iloc[[0]]], ignore_index=True))
+        with self.assertRaisesRegex(ValueError, "2系列"):
+            validate_taiwan_archive_snapshot(frame.iloc[1:].copy())
 
 
 class TaiwanArchiveLoaderTest(unittest.TestCase):

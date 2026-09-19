@@ -198,14 +198,21 @@ def render_price_vs_fundamentals(
 
 
 def render_overseas_historical_validation(
-    overseas_data: pd.DataFrame,
+    provisional_data: pd.DataFrame,
+    strict_data: pd.DataFrame,
     asset_prices: dict[str, pd.Series],
 ) -> None:
     st.markdown("##### 海外統計の公表日基準検証")
-    strict = build_overseas_validation_signals(overseas_data, strict=True)
-    provisional = build_overseas_validation_signals(overseas_data, strict=False)
+    strict = build_overseas_validation_signals(strict_data, strict=True)
+    provisional = build_overseas_validation_signals(provisional_data, strict=False)
     if not strict.empty and asset_prices:
-        st.markdown("###### 公表日確認済み検証（公表時刻・改定履歴は未検証）")
+        st.markdown("###### 公表日確認済み検証")
+        taiwan_range = strict.attrs.get("taiwan_release_range", (None, None))
+        korea_range = strict.attrs.get("korea_release_range", (None, None))
+        st.caption(
+            "台湾：公式archive当時値・公式前年比・実公表日｜韓国：実公表日付き公式月次履歴。"
+            f" 台湾公表範囲: {_format_range(taiwan_range)}｜韓国公表範囲: {_format_range(korea_range)}。"
+        )
         _render_validation_controls(strict, asset_prices, "strict")
     else:
         st.info("公表日確認済み検証に利用できる月次履歴が不足しています。速報は長期検証へ使用しません。")
@@ -215,6 +222,13 @@ def render_overseas_historical_validation(
             st.caption("暫定検証に利用できる履歴がありません。")
         else:
             _render_validation_controls(provisional, asset_prices, "provisional")
+
+
+def _format_range(value: tuple[object, object]) -> str:
+    start, end = value
+    if start is None or end is None:
+        return "利用不可"
+    return f"{pd.Timestamp(start):%Y-%m-%d}〜{pd.Timestamp(end):%Y-%m-%d}"
 
 
 def _render_validation_controls(

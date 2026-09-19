@@ -18,6 +18,7 @@ from data_loader import (
     load_korea_semiconductor_monthly_history,
     load_meti_semiconductor_iip,
     load_taiwan_semiconductor_orders,
+    load_taiwan_semiconductor_orders_archive_snapshot,
     load_yfinance_batch,
     merge_korea_semiconductor_exports,
 )
@@ -1806,6 +1807,7 @@ if main_view == "投資テーマ":
             semiconductor_iip = pd.DataFrame()
             machinery_orders = pd.Series(dtype=float)
             taiwan_orders = pd.DataFrame()
+            taiwan_archive = pd.DataFrame()
             korea_exports = pd.DataFrame()
             taiwan_error_text = None
             korea_error_text = None
@@ -1816,6 +1818,10 @@ if main_view == "投資テーマ":
                 taiwan_orders = load_taiwan_semiconductor_orders()
             except Exception as taiwan_error:
                 taiwan_error_text = str(taiwan_error)
+            try:
+                taiwan_archive = load_taiwan_semiconductor_orders_archive_snapshot()
+            except Exception as taiwan_archive_error:
+                st.warning(f"台湾strict archive snapshotを読み込めません: {taiwan_archive_error}")
             try:
                 korea_exports = load_korea_semiconductor_exports()
             except Exception as korea_error:
@@ -2204,6 +2210,7 @@ if main_view == "投資テーマ":
             }
             render_overseas_historical_validation(
                 pd.concat([taiwan_orders, korea_exports], ignore_index=True),
+                pd.concat([taiwan_archive, korea_exports], ignore_index=True),
                 overseas_validation_assets,
             )
             st.markdown("##### 過去の株価反応を検証")
