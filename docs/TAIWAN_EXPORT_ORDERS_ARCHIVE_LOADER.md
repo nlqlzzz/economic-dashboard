@@ -75,6 +75,8 @@ DataFrame attrsには、expected/discovered/loaded month数、discovery欠損月
 
 通常アプリは `data/taiwan_export_orders_archive.csv` を `load_taiwan_semiconductor_orders_archive_snapshot()` でnetworkなしに読む。`data/taiwan_export_orders_archive_manifest.json` は生成日時、安全開始月、最新月、月数、欠損月、元archive URL、月別attachment SHA-256を保持する。共通schemaや原文PDFは増やさない。
 
+snapshotは最古月から最新月までの全暦月が連続していることを必須とする。更新後に1か月でも欠損があれば保存せず、`missing_months` はsnapshotから実計算する。欠損をcurrent CSVで補完しない。
+
 手動更新は `scripts/update_taiwan_orders_archive.py --end YYYY-MM` を使う。既定では未取得月だけを逐次取得し、既存月は上書きしない。既存月を `--refresh` した結果、release date、value、公式YoY、source URL、attachment hashのいずれかが変われば差分を表示して停止し、`--accept-changes` の明示なしにはpoint-in-time snapshotを変更しない。通常CIはlive networkへ接続しない。
 
 ## Historical Validation接続

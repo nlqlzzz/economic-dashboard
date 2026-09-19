@@ -487,6 +487,24 @@ def validate_taiwan_archive_snapshot(frame: pd.DataFrame) -> None:
     per_month = frame.groupby("reference_period")["series_id"].agg(lambda values: set(values))
     if not per_month.map(lambda values: values == TAIWAN_ARCHIVE_SERIES_IDS).all():
         raise ValueError("台湾archive snapshotに2系列が揃わない月があります。")
+    missing_months = taiwan_archive_missing_months(frame)
+    if missing_months:
+        raise ValueError(
+            "台湾archive snapshotの月次系列が連続していません: "
+            + ", ".join(missing_months)
+        )
+
+
+def taiwan_archive_missing_months(frame: pd.DataFrame) -> list[str]:
+    """Return missing calendar months between a snapshot's minimum and maximum month."""
+    if frame.empty or "reference_period" not in frame.columns:
+        return []
+    periods = pd.to_datetime(frame["reference_period"], errors="coerce").dropna().dt.to_period("M")
+    if periods.empty:
+        return []
+    expected = pd.period_range(periods.min(), periods.max(), freq="M")
+    present = set(periods.unique())
+    return [str(period) for period in expected if period not in present]
 
 
 def load_taiwan_archive_manifest(

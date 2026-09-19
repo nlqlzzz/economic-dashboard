@@ -18,6 +18,7 @@ from taiwan_export_orders_archive import (
     TAIWAN_ARCHIVE_SNAPSHOT_PATH,
     load_taiwan_archive_manifest,
     load_taiwan_archive_snapshot,
+    taiwan_archive_missing_months,
     validate_taiwan_archive_snapshot,
 )
 
@@ -117,13 +118,14 @@ def main() -> int:
     result.to_csv(args.snapshot, index=False, date_format="%Y-%m-%dT%H:%M:%S%z")
     hashes = {**old_hashes, **fetched.attrs.get("attachment_hashes", {})}
     periods = pd.to_datetime(result["reference_period"])
+    snapshot_missing_months = taiwan_archive_missing_months(result)
     manifest = {
         "generated_at": pd.Timestamp.now(tz="Asia/Tokyo").isoformat(),
         "safe_start_month": periods.min().strftime("%Y-%m"),
         "latest_month": periods.max().strftime("%Y-%m"),
         "month_count": int(periods.dt.to_period("M").nunique()),
         "row_count": len(result),
-        "missing_months": [],
+        "missing_months": snapshot_missing_months,
         "source_archive_url": fetched.attrs.get("source_url"),
         "attachment_hashes": dict(sorted(hashes.items())),
     }
