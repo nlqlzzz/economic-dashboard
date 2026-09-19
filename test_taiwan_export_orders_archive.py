@@ -153,6 +153,24 @@ class TaiwanArchiveParserTest(unittest.TestCase):
         self.assertEqual(frame.iloc[0]["release_date"], pd.Timestamp("2021-02-24"))
         self.assertEqual(frame.iloc[0]["release_date"].hour, 0)
 
+    def test_legacy_product_paragraph_allows_long_explanation_before_yoy(self) -> None:
+        text = """
+        110年8月份外銷訂單統計 DATE 110.9.24 16:00
+        1.資訊通信產品：151.0億美元，主要因伺服器、網通產品及手機需求增加，
+        加上遠距應用延續，客戶持續備貨；惟部分零組件供應仍受限制，
+        各產品表現互有增減，較上年同月增12.3%。
+        2.電子產品：170.0億美元，因新興科技應用需求持續，供應鏈積極備貨，
+        加上晶圓代工產能需求暢旺，帶動接單表現，較上年同月增18.4%。
+        3.光學器材：20.0億美元，較上年同月減1.0%。
+        """
+        frame = parse_taiwan_export_orders_archive_text(
+            text, "https://official.example/2021-08.pdf", pd.Timestamp("2026-09-19")
+        ).set_index("series_id")
+        self.assertEqual(frame.loc["taiwan_information_communication_export_orders", "value"], 15_100)
+        self.assertEqual(frame.loc["taiwan_information_communication_export_orders", "yoy"], 12.3)
+        self.assertEqual(frame.loc["taiwan_electronic_export_orders", "value"], 17_000)
+        self.assertEqual(frame.loc["taiwan_electronic_export_orders", "yoy"], 18.4)
+
     def test_schema_mismatch_fails_without_current_csv_fallback(self) -> None:
         text = "114年1月份外銷訂單統計 DATE 114.2.20 電子產品：177.1億美元，較上年同月增1.5%。"
         with self.assertRaisesRegex(ValueError, "資訊與通信產品"):

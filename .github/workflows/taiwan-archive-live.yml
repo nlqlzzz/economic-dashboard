@@ -10,6 +10,7 @@ on:
         options:
           - representatives
           - early-2021
+          - target-2021-08
           - backfill
         default: representatives
 
@@ -43,9 +44,13 @@ jobs:
         continue-on-error: true
         run: python scripts/update_taiwan_orders_archive.py --diagnose-early-2021 --end 2021-08
 
+      - name: Recheck the single parser-blocked legacy month
+        if: inputs.mode == 'target-2021-08'
+        run: python scripts/update_taiwan_orders_archive.py --start 2021-08 --end 2021-08 --period 2021-08
+
       - name: Build initial strict snapshot
         if: inputs.mode == 'backfill'
-        run: python scripts/update_taiwan_orders_archive.py --start 2021-09 --end 2026-07
+        run: python scripts/update_taiwan_orders_archive.py --start 2021-08 --end 2026-07
 
       - name: Upload normalized snapshot
         if: inputs.mode == 'backfill'

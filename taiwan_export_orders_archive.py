@@ -347,17 +347,30 @@ def parse_taiwan_export_orders_archive_text(
         product_pattern = (
             r"資訊(?:與|及)?通信(?:產品)?" if product == "資訊與通信產品" else r"電子產品"
         )
-        match = re.search(
-            product_pattern
-            + r"\s*[：:]\s*([0-9,]+(?:\.[0-9]+)?)\s*億\s*美元"
-            + r".{0,180}?較\s*上\s*年\s*同\s*月\s*"
-            + r"(增|減)\s*([0-9]+(?:\.[0-9]+)?)\s*%",
+        heading = re.search(
+            product_pattern + r"\s*[：:]\s*",
             normalized,
         )
-        if match is None:
+        if heading is None:
             raise ValueError(f"台湾archive資料から{product}の金額・前年比を抽出できません。")
-        amount_hundred_million = float(match.group(1).replace(",", ""))
-        yoy = float(match.group(3)) * (1 if match.group(2) == "增" else -1)
+        # Older releases may place several explanatory sentences between the amount and
+        # official YoY.  Search only within this product's numbered paragraph so a
+        # cumulative or another product's YoY can never be captured accidentally.
+        tail = normalized[heading.end():]
+        next_heading = re.search(
+            r"(?:^|\s)\d+[\.、]\s*(?:資訊(?:與|及)?通信(?:產品)?|電子產品|光學器材|基本金屬|機械)",
+            tail,
+        )
+        section = tail[: next_heading.start()] if next_heading else tail[:1200]
+        amount = re.search(r"([0-9,]+(?:\.[0-9]+)?)\s*億\s*美元", section)
+        official_yoy = re.search(
+            r"較\s*上\s*年\s*同\s*月\s*(增|減)\s*([0-9]+(?:\.[0-9]+)?)\s*%",
+            section,
+        )
+        if amount is None or official_yoy is None:
+            raise ValueError(f"台湾archive資料から{product}の金額・前年比を抽出できません。")
+        amount_hundred_million = float(amount.group(1).replace(",", ""))
+        yoy = float(official_yoy.group(2)) * (1 if official_yoy.group(1) == "增" else -1)
         rows.append(
             {
                 "region": "Taiwan",
