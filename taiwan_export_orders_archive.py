@@ -421,6 +421,9 @@ def parse_taiwan_export_orders_archive_attachment(
             raise ValueError("台湾archive PDFに抽出可能なテキストがありません。")
     else:
         raise ValueError("台湾archive添付がXLSX/PDFではありません。")
+    embedded_period = _parse_roc_month(_compact_text(text))
+    if embedded_period is None or embedded_period != reference_period:
+        raise ValueError("台湾archive添付の対象月がarchive一覧と一致しません。")
     frame = parse_taiwan_export_orders_archive_text(
         text,
         source_url,
@@ -469,6 +472,10 @@ def validate_taiwan_archive_snapshot(frame: pd.DataFrame) -> None:
     required = ["reference_period", "release_date", "value", "yoy", "source_url"]
     if frame[required].isna().any().any() or frame["source_url"].astype(str).str.strip().eq("").any():
         raise ValueError("台湾archive snapshotにstrict必須値の欠損があります。")
+    release_dates = pd.to_datetime(frame["release_date"], errors="coerce")
+    period_ends = pd.to_datetime(frame["period_end"], errors="coerce")
+    if release_dates.le(period_ends).any():
+        raise ValueError("台湾archive snapshotの公表日が対象月末以前です。")
     if not frame["publication_stage"].eq("official_monthly_release").all():
         raise ValueError("台湾archive snapshotのpublication_stageが不正です。")
     if not frame["data_vintage"].eq("as_published_monthly_release").all():

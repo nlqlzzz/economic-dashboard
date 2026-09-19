@@ -15,8 +15,10 @@ from taiwan_export_orders_archive import (
     parse_taiwan_archive_article,
     parse_taiwan_news_archive_search_result,
     load_taiwan_archive_snapshot,
+    load_taiwan_archive_manifest,
     validate_taiwan_archive_snapshot,
     parse_taiwan_export_orders_archive_text,
+    parse_taiwan_export_orders_archive_attachment,
 )
 from data_loader import _load_taiwan_semiconductor_orders_archive
 
@@ -190,6 +192,17 @@ class TaiwanArchiveParserTest(unittest.TestCase):
                 text, "https://official.example/broken.pdf", pd.Timestamp("2026-09-19")
             )
 
+    @patch("taiwan_export_orders_archive._spreadsheet_to_text")
+    def test_attachment_rejects_reference_period_mismatch(self, spreadsheet_text) -> None:
+        spreadsheet_text.return_value = release_text(
+            "114年2月", "114.3.20 16:00", "120.0", "增", "1.0", "150.0", "增", "2.0"
+        )
+        with self.assertRaisesRegex(ValueError, "対象月"):
+            parse_taiwan_export_orders_archive_attachment(
+                b"PK fixture", "https://official.example/wrong.xlsx", pd.Timestamp("2026-09-19"),
+                reference_period=pd.Timestamp("2026-02-01"), release_date=None,
+            )
+
 
 class TaiwanArchiveSnapshotTest(unittest.TestCase):
     def snapshot(self) -> pd.DataFrame:
@@ -224,6 +237,26 @@ class TaiwanArchiveSnapshotTest(unittest.TestCase):
             validate_taiwan_archive_snapshot(pd.concat([frame, frame.iloc[[0]]], ignore_index=True))
         with self.assertRaisesRegex(ValueError, "2系列"):
             validate_taiwan_archive_snapshot(frame.iloc[1:].copy())
+
+    def test_snapshot_rejects_release_before_reference_month_end(self) -> None:
+        frame = self.snapshot()
+        frame.loc[frame["reference_period"].eq(pd.Timestamp("2025-01-01")), "release_date"] = pd.Timestamp("2024-12-20")
+        with self.assertRaisesRegex(ValueError, "対象月末以前"):
+            validate_taiwan_archive_snapshot(frame)
+
+    def test_committed_snapshot_keeps_safe_range_and_2025_vintage(self) -> None:
+        frame = load_taiwan_archive_snapshot()
+        manifest = load_taiwan_archive_manifest()
+        self.assertEqual(len(frame), 84)
+        self.assertEqual(frame["reference_period"].nunique(), 42)
+        self.assertEqual(frame["reference_period"].min(), pd.Timestamp("2022-08-01"))
+        self.assertEqual(frame["reference_period"].max(), pd.Timestamp("2026-01-01"))
+        self.assertEqual(manifest["safe_start_month"], "2022-08")
+        self.assertEqual(manifest["latest_month"], "2026-01")
+        self.assertEqual(manifest["missing_months"], [])
+        january = frame[frame["reference_period"].eq(pd.Timestamp("2025-01-01"))].set_index("series_id")
+        self.assertEqual(january.loc["taiwan_information_communication_export_orders", "value"], 12_060)
+        self.assertEqual(january.loc["taiwan_electronic_export_orders", "value"], 17_710)
 
 
 class TaiwanArchiveLoaderTest(unittest.TestCase):

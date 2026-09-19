@@ -50,7 +50,7 @@ jobs:
 
       - name: Build initial strict snapshot
         if: inputs.mode == 'backfill'
-        run: python scripts/update_taiwan_orders_archive.py --start 2022-08 --end 2025-12
+        run: python scripts/update_taiwan_orders_archive.py --start 2022-08 --end 2026-01
 
       - name: Upload normalized snapshot
         if: inputs.mode == 'backfill'

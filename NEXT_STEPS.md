@@ -43,7 +43,7 @@
 1. 台湾データ品質改善
    - 完了。[`docs/TAIWAN_EXPORT_ORDERS_HISTORY_DIAGNOSTIC.md`](docs/TAIWAN_EXPORT_ORDERS_HISTORY_DIAGNOSTIC.md)のGO判定に基づき、[`docs/TAIWAN_EXPORT_ORDERS_ARCHIVE_LOADER.md`](docs/TAIWAN_EXPORT_ORDERS_ARCHIVE_LOADER.md)の独立archive loaderと正規化snapshotを実装した。current CSVとarchive vintageを分離し、公表日・当時値・公式前年比の欠損をcurrent CSVで補完しない。公式一覧は2021年1月～2026年7月の67か月、欠損候補0。代表3か月（2021-01、2023-06、2025-01）はlive parse済み。初期月と全期間を再確認し、連続して安全なstrict開始月は2022-08とした。
 2. 海外Historical Validation拡張
-   - 実施。strictは台湾archive snapshotと韓国の実公表日付き月次履歴、provisionalは台湾current CSVと現行韓国データへ入力分離した。台湾単独は2022-08以降へ延長し、韓国は現行の2023-06開始を維持する。台湾＋韓国複合条件はそれ以前へ遡及しない。結果は公表後の関係として表示し、Cycle Scoreや売買シグナルへ昇格させない。
+   - 実施。strictは台湾archive snapshotと韓国の実公表日付き月次履歴、provisionalは台湾current CSVと現行韓国データへ入力分離した。台湾snapshotは2022-08～2026-01の42か月・84行・欠損0。韓国は現行の2023-06開始を維持し、台湾＋韓国複合条件はそれ以前へ遡及しない。台湾相関標本は主要4資産で42、キオクシアで15へ増えたが、相関は期間・資産で一貫せず、複合条件は8件（キオクシア4件）で低標本警告が残る。結果は公表後の関係として表示し、Cycle Scoreや売買シグナルへ昇格させない。
 3. 米国Big TechのAI関連設備投資（CapEx）分析（中期）
    - Japan Core 20 / Macro Sensitivityと今後の個別株分析に一定の目途がついた後、Microsoft、Alphabet / Google、Amazon、Metaを中心に着手する。必要に応じてOracle、Apple、その他主要Cloud / Hyperscalerも検討する。
    - 四半期CapEx、前年比、前四半期比、トレンド、Guidance、AI / Data Center関連の投資額・計画、各社合計CapEx、合計前年比、CapEx momentumを候補とする。
