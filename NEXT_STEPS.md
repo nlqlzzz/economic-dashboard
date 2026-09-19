@@ -44,14 +44,10 @@
    - 完了。[`docs/TAIWAN_EXPORT_ORDERS_HISTORY_DIAGNOSTIC.md`](docs/TAIWAN_EXPORT_ORDERS_HISTORY_DIAGNOSTIC.md)のGO判定に基づき、[`docs/TAIWAN_EXPORT_ORDERS_ARCHIVE_LOADER.md`](docs/TAIWAN_EXPORT_ORDERS_ARCHIVE_LOADER.md)の独立archive loaderと正規化snapshotを実装した。current CSVとarchive vintageを分離し、公表日・当時値・公式前年比の欠損をcurrent CSVで補完しない。公式一覧は2021年1月～2026年7月の67か月、欠損候補0。代表3か月（2021-01、2023-06、2025-01）はlive parse済み。初期月と全期間を再確認し、連続して安全なstrict開始月は2022-08とした。
 2. 海外Historical Validation拡張
    - 実施。strictは台湾archive snapshotと韓国の実公表日付き月次履歴、provisionalは台湾current CSVと現行韓国データへ入力分離した。台湾snapshotは2022-08～2026-01の42か月・84行・欠損0。韓国は現行の2023-06開始を維持し、台湾＋韓国複合条件はそれ以前へ遡及しない。台湾相関標本は主要4資産で42、キオクシアで15へ増えたが、相関は期間・資産で一貫せず、複合条件は8件（キオクシア4件）で低標本警告が残る。結果は公表後の関係として表示し、Cycle Scoreや売買シグナルへ昇格させない。
-3. 米国Big TechのAI関連設備投資（CapEx）分析（中期）
-   - Japan Core 20 / Macro Sensitivityと今後の個別株分析に一定の目途がついた後、Microsoft、Alphabet / Google、Amazon、Metaを中心に着手する。必要に応じてOracle、Apple、その他主要Cloud / Hyperscalerも検討する。
-   - 四半期CapEx、前年比、前四半期比、トレンド、Guidance、AI / Data Center関連の投資額・計画、各社合計CapEx、合計前年比、CapEx momentumを候補とする。
-   - 会計上のCapEx全体とAI専用CapExを混同せず、企業間の定義差と、AI関連額を公式に分離できる範囲を明示する。
-   - Big Tech CapEx / AI Investment → Taiwan Orders → Korea Exports → Japan Production / Shipments / Inventory → Corporate Earnings → Semiconductor Market / SOX → Price vs Fundamentals → Historical Validationという上流から下流の分析導線を検討する。
-   - CapEx、Guidance、momentumが台湾受注、韓国輸出、日本の生産・出荷、SOX、日本主要半導体株に先行したかを公表日基準で検証し、Proxy・相関・先行指標を混同しない。
-   - 着手時に公式データ、SEC filings / Investor Relations資料、CapEx定義の企業間差、AI関連CapExの抽出可能性、Guidance、公表日管理、Historical Validation手法を改めて調査する。
-   - 次候補。ただし台湾strict拡張後も資産・条件別の低標本警告と期間依存性を確認し、Cycle Scoreは引き続き保留する。
+3. 米国Big TechのAI関連設備投資（CapEx）限定採否調査
+   - [`docs/BIGTECH_CAPEX_FIT_DIAGNOSTIC.md`](docs/BIGTECH_CAPEX_FIT_DIAGNOSTIC.md)で4社×3開示を一度だけ診断した。Alphabet / Metaは同一対象年度・同一定義のguidance変更、公表時点、AI / Data Center用途を公式資料で追跡でき、既存台湾・韓国より上流の計画確認として追加価値があるためADOPT。Microsoft / Amazonは今回の連続開示では同一年度の数値guidanceを安全に比較できずDO NOT ADOPTとした。
+   - 全体は**限定GO**だが、意味は「Alphabet / Metaだけの小さなリサーチ機能を要件検討する価値がある」に限る。本実装は未決定であり、ユーザー判断なしにloader、UI、DB、Decision Log連携、自動更新へ進まない。今回の調査で一度区切り、別API・ベンダー・archiveを連鎖調査しない。
+   - 半導体大型拡張は停止し、Cycle Scoreは引き続き保留する。売買予測力は今回の少数事例では評価しない。
 4. Global Semiconductor Cycle Score（保留）
    - 複数地域・複数資産で安定した有用性を確認できた場合に限り、各要素の寄与を開示する説明可能なスコアを再検討する。
 
@@ -73,6 +69,7 @@ A. 決算比較、B. 価格品質・時点・期間整合、C. 日本株主画�
    - Core20の判断区分、根拠、想定期間、判断時点Snapshotを追記保存し、20・60・120営業日後に同一終点の個別株・TOPIXリターンを評価するMVPを運用する。
    - Supabase設定後に実判断・仮想判断を蓄積し、未満了・価格品質・共通終点欠損の扱いが実データでも明確か確認する。
    - 理由別勝率や統合スコアへ進む前に、Snapshot schemaと前向き評価の継続性を検証する。
+   - 現在は運用段階であり、具体的な支障がない限り新機能を追加しない。Big Tech CapExも当面は既存コメント／見直し・反証条件への手動記録候補に留める。
 2. **評価水準に必要なデータと比較条件の整備**
    - [`docs/VALUATION_READINESS.md`](docs/VALUATION_READINESS.md)でpoint-in-time選択と安全停止条件を実装した。Yahoo調整後価格とJ-Quants EPSを当アプリで組み合わせるCurrent Forward PERは停止し、`AdjFactor=1`を`basis_verified`へ緩和しない。
    - 2026-09-18の最終live診断（**ユーザー提供結果**）は、Core20 20、Financial Summary取得失敗0、有効Current Forecast EPS 14/20、Adjustment bars成功17/20、API error 0、`input_unavailable` 3、safe Current Forward PER 0/20、Forecast Revision comparable 0/20、Historical Forward PER 0/20、split/per-share basis unverified 20/20。J-Quants価格終端2026-06-26、Yahoo価格終端2026-09-16、lag 82日だった。
