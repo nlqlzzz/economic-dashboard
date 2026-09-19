@@ -21,6 +21,14 @@ from global_semiconductor_demand import (
     parse_korea_monthly_trade_release,
     parse_taiwan_export_orders_csv,
 )
+from taiwan_export_orders_archive import (
+    TAIWAN_ARCHIVE_DEFAULT_START,
+    TAIWAN_EXPORT_ORDERS_ARCHIVE_URL,
+    discover_taiwan_export_order_releases,
+    empty_taiwan_archive_frame,
+    parse_taiwan_archive_article,
+    parse_taiwan_export_orders_archive_attachment,
+)
 
 
 MAX_FETCH_ATTEMPTS = 2
@@ -361,6 +369,102 @@ def load_taiwan_semiconductor_orders() -> pd.DataFrame:
             "fetched_at": fetched_at,
             "fetch_attempts": total_attempts,
             "fetch_duration_seconds": time.perf_counter() - started_at,
+        }
+    )
+    return result
+
+
+@st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
+def load_taiwan_semiconductor_orders_archive(
+    start_period: str = "2021-01",
+    end_period: str | None = None,
+) -> pd.DataFrame:
+    """台湾公式archiveの当時値を独立したpoint-in-time履歴として返す。"""
+    start = pd.Timestamp(start_period).to_period("M").to_timestamp()
+    if start < TAIWAN_ARCHIVE_DEFAULT_START:
+        raise ValueError("台湾archive loaderの対応開始月は2021-01です。")
+    fetched_at = pd.Timestamp.now(tz="Asia/Tokyo")
+    listing, listing_attempts = _load_with_retry(
+        lambda: _download_text(TAIWAN_EXPORT_ORDERS_ARCHIVE_URL)
+    )
+    releases = discover_taiwan_export_order_releases(
+        listing,
+        TAIWAN_EXPORT_ORDERS_ARCHIVE_URL,
+        start_period=start,
+        end_period=end_period,
+    )
+    if not releases:
+        raise DataUnavailableError("台湾外銷訂單archiveの月次記事を発見できません。")
+
+    frames: list[pd.DataFrame] = []
+    failures: list[dict[str, str]] = []
+    hashes: dict[str, str] = {}
+    total_attempts = listing_attempts
+    for release in releases:
+        try:
+            article, attempts = _load_with_retry(
+                lambda target=release.article_url: _download_text(target)
+            )
+            total_attempts += attempts
+            period, release_date, attachment_url = parse_taiwan_archive_article(
+                article, release.article_url
+            )
+            if period != release.reference_period:
+                raise DataSchemaError("archive一覧と記事の対象月が一致しません。")
+            attachment, attempts = _load_with_retry(
+                lambda target=attachment_url: _download_bytes(target)
+            )
+            total_attempts += attempts
+            parsed = parse_taiwan_export_orders_archive_attachment(
+                attachment,
+                attachment_url,
+                fetched_at,
+                reference_period=period,
+                release_date=release_date,
+            )
+            frames.append(parsed)
+            hashes[period.strftime("%Y-%m")] = str(parsed.attrs["attachment_sha256"])
+        except Exception as error:
+            failures.append(
+                {
+                    "reference_period": release.reference_period.strftime("%Y-%m"),
+                    "article_url": release.article_url,
+                    "error_type": type(error).__name__,
+                    "detail": str(error),
+                }
+            )
+        # 公式rate limitが未公表のため逐次・低速で取得する。
+        time.sleep(0.2)
+
+    if not frames:
+        result = empty_taiwan_archive_frame()
+    else:
+        result = pd.concat(frames, ignore_index=True).sort_values(
+            ["reference_period", "series_id"]
+        ).reset_index(drop=True)
+    expected = pd.period_range(
+        start=start,
+        end=(
+            pd.Timestamp(end_period).to_period("M")
+            if end_period is not None
+            else max(item.reference_period for item in releases).to_period("M")
+        ),
+        freq="M",
+    )
+    discovered = {item.reference_period.to_period("M") for item in releases}
+    loaded = set(pd.to_datetime(result["reference_period"]).dt.to_period("M")) if not result.empty else set()
+    result.attrs.update(
+        {
+            "source": "台湾経済部 統計処 外銷訂單統計速報 archive",
+            "source_url": TAIWAN_EXPORT_ORDERS_ARCHIVE_URL,
+            "fetched_at": fetched_at,
+            "fetch_attempts": total_attempts,
+            "expected_months": len(expected),
+            "discovered_months": len(discovered),
+            "loaded_months": len(loaded),
+            "missing_discovery_months": [str(item) for item in expected if item not in discovered],
+            "failed_months": failures,
+            "attachment_hashes": hashes,
         }
     )
     return result
