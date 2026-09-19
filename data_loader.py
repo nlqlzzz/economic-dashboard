@@ -21,6 +21,19 @@ from global_semiconductor_demand import (
     parse_korea_monthly_trade_release,
     parse_taiwan_export_orders_csv,
 )
+from taiwan_export_orders_archive import (
+    TAIWAN_ARCHIVE_DEFAULT_START,
+    TAIWAN_EXPORT_ORDERS_ARCHIVE_URL,
+    TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL,
+    TAIWAN_ARCHIVE_VERIFIED_LEGACY_RELEASE_DATES,
+    TaiwanArchiveHttpClient,
+    discover_taiwan_export_order_releases,
+    build_taiwan_news_archive_search_form,
+    parse_taiwan_news_archive_search_result,
+    empty_taiwan_archive_frame,
+    parse_taiwan_archive_article,
+    parse_taiwan_export_orders_archive_attachment,
+)
 
 
 MAX_FETCH_ATTEMPTS = 2
@@ -361,6 +374,165 @@ def load_taiwan_semiconductor_orders() -> pd.DataFrame:
             "fetched_at": fetched_at,
             "fetch_attempts": total_attempts,
             "fetch_duration_seconds": time.perf_counter() - started_at,
+        }
+    )
+    return result
+
+
+@st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
+def load_taiwan_semiconductor_orders_archive(
+    start_period: str = "2021-01",
+    end_period: str | None = None,
+) -> pd.DataFrame:
+    """台湾公式archiveの当時値を独立したpoint-in-time履歴として返す。"""
+    return _load_taiwan_semiconductor_orders_archive(
+        start_period=start_period,
+        end_period=end_period,
+    )
+
+
+def diagnose_taiwan_semiconductor_orders_archive(
+    reference_periods: tuple[str, ...] = ("2025-01", "2023-06", "2021-01"),
+) -> pd.DataFrame:
+    """代表月だけを取得する手動live診断。通常アプリからは呼ばない。"""
+    periods = tuple(
+        pd.Timestamp(period).to_period("M").to_timestamp()
+        for period in reference_periods
+    )
+    return _load_taiwan_semiconductor_orders_archive(
+        start_period=min(periods).strftime("%Y-%m"),
+        end_period=max(periods).strftime("%Y-%m"),
+        reference_periods=periods,
+    )
+
+
+def _load_taiwan_semiconductor_orders_archive(
+    *,
+    start_period: str,
+    end_period: str | None,
+    reference_periods: tuple[pd.Timestamp, ...] | None = None,
+    http_client: TaiwanArchiveHttpClient | None = None,
+) -> pd.DataFrame:
+    start = pd.Timestamp(start_period).to_period("M").to_timestamp()
+    if start < TAIWAN_ARCHIVE_DEFAULT_START:
+        raise ValueError("台湾archive loaderの対応開始月は2021-01です。")
+    fetched_at = pd.Timestamp.now(tz="Asia/Tokyo")
+    client = http_client or TaiwanArchiveHttpClient()
+    listing = client.get_text(TAIWAN_EXPORT_ORDERS_ARCHIVE_URL)
+    releases = discover_taiwan_export_order_releases(
+        listing,
+        TAIWAN_EXPORT_ORDERS_ARCHIVE_URL,
+        start_period=start,
+        end_period=end_period,
+    )
+    if not releases:
+        raise DataUnavailableError("台湾外銷訂單archiveの月次記事を発見できません。")
+    coverage_releases = list(releases)
+    if reference_periods is not None:
+        requested = set(reference_periods)
+        releases = [item for item in releases if item.reference_period in requested]
+        missing_requested = sorted(requested - {item.reference_period for item in releases})
+        if missing_requested:
+            missing_label = ", ".join(item.strftime("%Y-%m") for item in missing_requested)
+            raise DataUnavailableError(f"台湾archiveに代表月がありません: {missing_label}")
+
+    news_search_form = client.get_text(TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL)
+    total_attempts = 2
+
+    frames: list[pd.DataFrame] = []
+    failures: list[dict[str, str]] = []
+    hashes: dict[str, str] = {}
+    for release in releases:
+        article_url = release.article_url
+        try:
+            try:
+                search_result = client.post_text(
+                    TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL,
+                    build_taiwan_news_archive_search_form(
+                        news_search_form, release.reference_period
+                    ),
+                )
+                total_attempts += 1
+                article_url = parse_taiwan_news_archive_search_result(
+                    search_result,
+                    release.reference_period,
+                    TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL,
+                )
+            except ValueError:
+                release_date = TAIWAN_ARCHIVE_VERIFIED_LEGACY_RELEASE_DATES.get(
+                    release.reference_period
+                )
+                if release_date is None:
+                    raise
+                period = release.reference_period
+                # 添付URLはmanifestで生成せず、公式速報一覧に現存するリンクを使う。
+                attachment_url = release.article_url
+                article_url = attachment_url
+            else:
+                article = client.get_text(article_url)
+                total_attempts += 1
+                period, release_date, attachment_url = parse_taiwan_archive_article(
+                    article, article_url
+                )
+                if period != release.reference_period:
+                    raise DataSchemaError("archive一覧と記事の対象月が一致しません。")
+            attachment, content_type = client.get_attachment(attachment_url)
+            total_attempts += 1
+            parsed = parse_taiwan_export_orders_archive_attachment(
+                attachment,
+                attachment_url,
+                fetched_at,
+                reference_period=period,
+                release_date=release_date,
+            )
+            frames.append(parsed)
+            hashes[period.strftime("%Y-%m")] = str(parsed.attrs["attachment_sha256"])
+            parsed.attrs["attachment_content_type"] = content_type
+        except Exception as error:
+            failures.append(
+                {
+                    "reference_period": release.reference_period.strftime("%Y-%m"),
+                    "article_url": article_url,
+                    "error_type": type(error).__name__,
+                    "detail": str(error),
+                }
+            )
+
+    if not frames:
+        result = empty_taiwan_archive_frame()
+    else:
+        result = pd.concat(frames, ignore_index=True).sort_values(
+            ["reference_period", "series_id"]
+        ).reset_index(drop=True)
+    expected = pd.period_range(
+        start=start,
+        end=(
+            pd.Timestamp(end_period).to_period("M")
+            if end_period is not None
+            else max(item.reference_period for item in coverage_releases).to_period("M")
+        ),
+        freq="M",
+    )
+    discovered = {item.reference_period.to_period("M") for item in coverage_releases}
+    loaded = set(pd.to_datetime(result["reference_period"]).dt.to_period("M")) if not result.empty else set()
+    result.attrs.update(
+        {
+            "source": "台湾経済部 統計処 外銷訂單統計速報 archive",
+            "source_url": TAIWAN_EXPORT_ORDERS_ARCHIVE_URL,
+            "fetched_at": fetched_at,
+            "fetch_attempts": total_attempts,
+            "expected_months": len(expected),
+            "discovered_months": len(discovered),
+            "loaded_months": len(loaded),
+            "missing_discovery_months": [str(item) for item in expected if item not in discovered],
+            "failed_months": failures,
+            "attachment_hashes": hashes,
+            "minimum_request_interval_seconds": client.minimum_interval_seconds,
+            "selected_reference_periods": (
+                [item.strftime("%Y-%m") for item in reference_periods]
+                if reference_periods is not None
+                else None
+            ),
         }
     )
     return result
