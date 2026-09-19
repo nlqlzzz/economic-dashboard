@@ -46,6 +46,40 @@ class SemiconductorValidationTest(unittest.TestCase):
         self.assertEqual(strict.attrs["revision_history_status"], "not_verified")
         self.assertEqual(provisional.attrs["validation_mode"], "provisional")
 
+    def test_strict_taiwan_requires_archive_provenance_and_complete_month(self) -> None:
+        base = _records().iloc[0].to_dict()
+        archive = []
+        for series_id in (
+            "taiwan_electronic_export_orders",
+            "taiwan_information_communication_export_orders",
+        ):
+            archive.append({
+                **base, "series_id": series_id,
+                "release_date": pd.Timestamp("2025-02-20 16:00"),
+                "publication_stage": "official_monthly_release",
+                "data_vintage": "as_published_monthly_release",
+                "yoy_is_derived": False,
+            })
+        current = {**archive[0], "reference_period": pd.Timestamp("2025-02-01"), "release_date": pd.Timestamp("2025-03-20"), "data_vintage": None, "yoy_is_derived": True}
+        incomplete = {**archive[0], "reference_period": pd.Timestamp("2025-03-01"), "release_date": pd.Timestamp("2025-04-20")}
+        result = build_overseas_validation_signals(pd.DataFrame([*archive, current, incomplete]), strict=True)
+        self.assertEqual(set(result.columns), {
+            "taiwan_electronic_export_orders",
+            "taiwan_information_communication_export_orders",
+        })
+        self.assertEqual(len(result), 1)
+
+    def test_combined_condition_is_unknown_before_first_korea_release(self) -> None:
+        index = pd.to_datetime(["2021-10-20", "2021-11-20", "2023-07-20", "2023-08-20"])
+        signals = pd.DataFrame({
+            "taiwan_electronic_export_orders": [1.0, 2.0, 3.0, 4.0],
+            "korea_semiconductor_exports_monthly": [None, None, 5.0, 6.0],
+        }, index=index)
+        result = add_global_condition_signals(signals)
+        self.assertTrue(pd.isna(result.loc[index[1], "Taiwan AND Korea Improving"]))
+        self.assertTrue(pd.isna(result.loc[index[2], "Taiwan AND Korea Improving"]))
+        self.assertTrue(result.loc[index[3], "Taiwan AND Korea Improving"])
+
     def test_partial_periods_never_enter_historical_signals(self) -> None:
         frame = _records()
         result = build_overseas_validation_signals(frame, strict=False)

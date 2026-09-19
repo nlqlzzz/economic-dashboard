@@ -1,5 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 import requests
@@ -12,7 +14,12 @@ from taiwan_export_orders_archive import (
     discover_taiwan_export_order_releases,
     parse_taiwan_archive_article,
     parse_taiwan_news_archive_search_result,
+    load_taiwan_archive_snapshot,
+    load_taiwan_archive_manifest,
+    taiwan_archive_missing_months,
+    validate_taiwan_archive_snapshot,
     parse_taiwan_export_orders_archive_text,
+    parse_taiwan_export_orders_archive_attachment,
 )
 from data_loader import _load_taiwan_semiconductor_orders_archive
 
@@ -149,12 +156,140 @@ class TaiwanArchiveParserTest(unittest.TestCase):
         self.assertEqual(frame.iloc[0]["release_date"], pd.Timestamp("2021-02-24"))
         self.assertEqual(frame.iloc[0]["release_date"].hour, 0)
 
+    def test_legacy_product_paragraph_allows_long_explanation_before_yoy(self) -> None:
+        text = """
+        110年8月份外銷訂單統計 DATE 110.9.24 16:00
+        1.資訊通信產品：151.0億美元，主要因伺服器、網通產品及手機需求增加，
+        加上遠距應用延續，客戶持續備貨；惟部分零組件供應仍受限制，
+        各產品表現互有增減，較上年同月增12.3%。
+        2.電子產品：170.0億美元，因新興科技應用需求持續，供應鏈積極備貨，
+        加上晶圓代工產能需求暢旺，帶動接單表現，較上年同月增18.4%。
+        3.光學器材：20.0億美元，較上年同月減1.0%。
+        """
+        frame = parse_taiwan_export_orders_archive_text(
+            text, "https://official.example/2021-08.pdf", pd.Timestamp("2026-09-19")
+        ).set_index("series_id")
+        self.assertEqual(frame.loc["taiwan_information_communication_export_orders", "value"], 15_100)
+        self.assertEqual(frame.loc["taiwan_information_communication_export_orders", "yoy"], 12.3)
+        self.assertEqual(frame.loc["taiwan_electronic_export_orders", "value"], 17_000)
+        self.assertEqual(frame.loc["taiwan_electronic_export_orders", "yoy"], 18.4)
+
+    def test_product_paragraph_accepts_official_ze_modifier(self) -> None:
+        text = """
+        112年5月份外銷訂單統計 DATE 112.6.20 16:00
+        1.資訊通信產品：126.0億美元，較上年同月則減9.5%。
+        2.電子產品：154.7億美元，較上年同月則減16.6%。
+        """
+        frame = parse_taiwan_export_orders_archive_text(
+            text, "https://official.example/2023-05.pdf", pd.Timestamp("2026-09-19")
+        ).set_index("series_id")
+        self.assertEqual(frame.loc["taiwan_information_communication_export_orders", "yoy"], -9.5)
+        self.assertEqual(frame.loc["taiwan_electronic_export_orders", "yoy"], -16.6)
+
     def test_schema_mismatch_fails_without_current_csv_fallback(self) -> None:
         text = "114年1月份外銷訂單統計 DATE 114.2.20 電子產品：177.1億美元，較上年同月增1.5%。"
         with self.assertRaisesRegex(ValueError, "資訊與通信產品"):
             parse_taiwan_export_orders_archive_text(
                 text, "https://official.example/broken.pdf", pd.Timestamp("2026-09-19")
             )
+
+    @patch("taiwan_export_orders_archive._spreadsheet_to_text")
+    def test_attachment_rejects_reference_period_mismatch(self, spreadsheet_text) -> None:
+        spreadsheet_text.return_value = release_text(
+            "114年2月", "114.3.20 16:00", "120.0", "增", "1.0", "150.0", "增", "2.0"
+        )
+        with self.assertRaisesRegex(ValueError, "対象月"):
+            parse_taiwan_export_orders_archive_attachment(
+                b"PK fixture", "https://official.example/wrong.xlsx", pd.Timestamp("2026-09-19"),
+                reference_period=pd.Timestamp("2026-02-01"), release_date=None,
+            )
+
+
+class TaiwanArchiveSnapshotTest(unittest.TestCase):
+    def snapshot(self) -> pd.DataFrame:
+        first = parse_taiwan_export_orders_archive_text(
+            release_text("114年2月", "114.3.20 16:00", "150.0", "增", "5.0", "170.0", "增", "6.0"),
+            "https://official.example/2025-02.pdf", pd.Timestamp("2026-09-19"),
+        )
+        revised = parse_taiwan_export_orders_archive_text(
+            release_text("114年1月", "114.2.20 16:00", "120.6", "減", "13.3", "177.1", "增", "1.5"),
+            "https://official.example/2025-01.pdf", pd.Timestamp("2026-09-19"),
+        )
+        return pd.concat([first, revised], ignore_index=True)
+
+    def test_snapshot_round_trip_preserves_strict_vintage(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "snapshot.csv"
+            self.snapshot().to_csv(path, index=False)
+            frame = load_taiwan_archive_snapshot(path)
+        self.assertEqual(tuple(frame.columns), SEMICONDUCTOR_DATA_COLUMNS)
+        self.assertEqual(len(frame), 4)
+        value = frame.loc[
+            frame["series_id"].eq("taiwan_information_communication_export_orders")
+            & frame["reference_period"].eq(pd.Timestamp("2025-01-01")), "value"
+        ].item()
+        self.assertEqual(value, 12_060)
+        self.assertFalse(frame["yoy_is_derived"].any())
+        self.assertTrue(frame["release_date"].notna().all())
+
+    def test_snapshot_rejects_duplicate_and_incomplete_month(self) -> None:
+        frame = self.snapshot()
+        with self.assertRaisesRegex(ValueError, "重複"):
+            validate_taiwan_archive_snapshot(pd.concat([frame, frame.iloc[[0]]], ignore_index=True))
+        with self.assertRaisesRegex(ValueError, "2系列"):
+            validate_taiwan_archive_snapshot(frame.iloc[1:].copy())
+
+    def test_snapshot_rejects_missing_calendar_month(self) -> None:
+        january = parse_taiwan_export_orders_archive_text(
+            release_text("115年1月", "115.2.20 16:00", "150.0", "增", "5.0", "170.0", "增", "6.0"),
+            "https://official.example/2026-01.pdf", pd.Timestamp("2026-09-19"),
+        )
+        march = parse_taiwan_export_orders_archive_text(
+            release_text("115年3月", "115.4.20 16:00", "151.0", "增", "5.1", "171.0", "增", "6.1"),
+            "https://official.example/2026-03.pdf", pd.Timestamp("2026-09-19"),
+        )
+        frame = pd.concat([january, march], ignore_index=True)
+        self.assertEqual(taiwan_archive_missing_months(frame), ["2026-02"])
+        with self.assertRaisesRegex(ValueError, "2026-02"):
+            validate_taiwan_archive_snapshot(frame)
+
+    def test_snapshot_accepts_three_continuous_months(self) -> None:
+        january = parse_taiwan_export_orders_archive_text(
+            release_text("115年1月", "115.2.20 16:00", "150.0", "增", "5.0", "170.0", "增", "6.0"),
+            "https://official.example/2026-01.pdf", pd.Timestamp("2026-09-19"),
+        )
+        february = parse_taiwan_export_orders_archive_text(
+            release_text("115年2月", "115.3.20 16:00", "150.5", "增", "5.0", "170.5", "增", "6.0"),
+            "https://official.example/2026-02.pdf", pd.Timestamp("2026-09-19"),
+        )
+        march = parse_taiwan_export_orders_archive_text(
+            release_text("115年3月", "115.4.20 16:00", "151.0", "增", "5.1", "171.0", "增", "6.1"),
+            "https://official.example/2026-03.pdf", pd.Timestamp("2026-09-19"),
+        )
+        frame = pd.concat([january, february, march], ignore_index=True)
+        self.assertEqual(taiwan_archive_missing_months(frame), [])
+        validate_taiwan_archive_snapshot(frame)
+
+    def test_snapshot_rejects_release_before_reference_month_end(self) -> None:
+        frame = self.snapshot()
+        frame.loc[frame["reference_period"].eq(pd.Timestamp("2025-01-01")), "release_date"] = pd.Timestamp("2024-12-20")
+        with self.assertRaisesRegex(ValueError, "対象月末以前"):
+            validate_taiwan_archive_snapshot(frame)
+
+    def test_committed_snapshot_keeps_safe_range_and_2025_vintage(self) -> None:
+        frame = load_taiwan_archive_snapshot()
+        manifest = load_taiwan_archive_manifest()
+        self.assertEqual(len(frame), 84)
+        self.assertEqual(frame["reference_period"].nunique(), 42)
+        self.assertEqual(frame["reference_period"].min(), pd.Timestamp("2022-08-01"))
+        self.assertEqual(frame["reference_period"].max(), pd.Timestamp("2026-01-01"))
+        self.assertEqual(manifest["safe_start_month"], "2022-08")
+        self.assertEqual(manifest["latest_month"], "2026-01")
+        self.assertEqual(manifest["missing_months"], [])
+        self.assertEqual(taiwan_archive_missing_months(frame), [])
+        january = frame[frame["reference_period"].eq(pd.Timestamp("2025-01-01"))].set_index("series_id")
+        self.assertEqual(january.loc["taiwan_information_communication_export_orders", "value"], 12_060)
+        self.assertEqual(january.loc["taiwan_electronic_export_orders", "value"], 17_710)
 
 
 class TaiwanArchiveLoaderTest(unittest.TestCase):
@@ -190,6 +325,38 @@ class TaiwanArchiveLoaderTest(unittest.TestCase):
             pd.Timestamp("2021-02-24"),
         )
         self.assertEqual(parse_attachment.call_args.args[1], "https://official/book")
+
+    @patch("data_loader.parse_taiwan_export_orders_archive_attachment")
+    @patch("data_loader.discover_taiwan_export_order_releases")
+    def test_official_direct_attachment_must_supply_its_own_release_date(
+        self, discover, parse_attachment
+    ) -> None:
+        client = Mock(spec=TaiwanArchiveHttpClient)
+        client.minimum_interval_seconds = 3.0
+        client.get_text.side_effect = [
+            "listing", '<input type="hidden" name="__VIEWSTATE" value="state">',
+        ]
+        client.post_text.return_value = "no matching news article"
+        client.get_attachment.return_value = (b"%PDF fixture", "application/pdf")
+        official_attachment = (
+            "https://www.moea.gov.tw/Mns/DOS/content/"
+            "wHandMenuFile.ashx?file_id=38754"
+        )
+        discover.return_value = [
+            TaiwanArchiveRelease(pd.Timestamp("2026-02-01"), official_attachment, "115年2月")
+        ]
+        parsed = parse_taiwan_export_orders_archive_text(
+            release_text("115年2月", "115.3.20 16:00", "120.0", "增", "1.0", "150.0", "增", "2.0"),
+            official_attachment, pd.Timestamp("2026-09-19"),
+        )
+        parsed.attrs["attachment_sha256"] = "direct"
+        parse_attachment.return_value = parsed
+        frame = _load_taiwan_semiconductor_orders_archive(
+            start_period="2026-02", end_period="2026-02", http_client=client
+        )
+        self.assertEqual(len(frame), 2)
+        self.assertIsNone(parse_attachment.call_args.kwargs["release_date"])
+        self.assertEqual(parse_attachment.call_args.args[1], official_attachment)
 
     @patch("data_loader.parse_taiwan_export_orders_archive_attachment")
     @patch("data_loader.parse_taiwan_archive_article")

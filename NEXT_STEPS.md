@@ -41,9 +41,9 @@
 韓国半導体輸出の長期履歴拡張は終了した。[`docs/KOREA_SEMICONDUCTOR_HISTORY_DIAGNOSTIC.md`](docs/KOREA_SEMICONDUCTOR_HISTORY_DIAGNOSTIC.md)でKOSIS / ITSTATを、[`docs/KOREA_ICT_ARCHIVE_DIAGNOSTIC.md`](docs/KOREA_ICT_ARCHIVE_DIAGNOSTIC.md)で旧MSIT公式記事archiveを診断したが、2021年以降の実公表日と当時値を連続して自動復元できないため、厳密Historical Validation延長は**NO-GO**とする。現行の2023年6月開始を維持し、同じ経路の調査は反復しない。
 
 1. 台湾データ品質改善
-   - [`docs/TAIWAN_EXPORT_ORDERS_HISTORY_DIAGNOSTIC.md`](docs/TAIWAN_EXPORT_ORDERS_HISTORY_DIAGNOSTIC.md)のGO判定に基づき、[`docs/TAIWAN_EXPORT_ORDERS_ARCHIVE_LOADER.md`](docs/TAIWAN_EXPORT_ORDERS_ARCHIVE_LOADER.md)の独立archive loaderを実装した。current CSVとarchive vintageを分離し、公表日・当時値・公式前年比の欠損をcurrent CSVで補完しない。公式一覧は2021年1月～2026年7月の67か月、欠損候補0。代表3か月（2021-01、2023-06、2025-01）は3秒/requestと429 bounded retryを用いた実loaderのlive parseに成功し、台湾archive loaderのlive確認を完了した。
+   - 完了。[`docs/TAIWAN_EXPORT_ORDERS_HISTORY_DIAGNOSTIC.md`](docs/TAIWAN_EXPORT_ORDERS_HISTORY_DIAGNOSTIC.md)のGO判定に基づき、[`docs/TAIWAN_EXPORT_ORDERS_ARCHIVE_LOADER.md`](docs/TAIWAN_EXPORT_ORDERS_ARCHIVE_LOADER.md)の独立archive loaderと正規化snapshotを実装した。current CSVとarchive vintageを分離し、公表日・当時値・公式前年比の欠損をcurrent CSVで補完しない。公式一覧は2021年1月～2026年7月の67か月、欠損候補0。代表3か月（2021-01、2023-06、2025-01）はlive parse済み。初期月と全期間を再確認し、連続して安全なstrict開始月は2022-08とした。
 2. 海外Historical Validation拡張
-   - PR86で台湾archiveを厳密検証へ接続する。接続前に、ローリングnews history外となった2021年初の月別公表日coverageを確認し、連続して安全な開始月を確定する。複数資産で先行性と条件付きリターンの安定性を再確認する。韓国は現行の2023年6月開始を維持し、台湾＋韓国の複合条件をそれ以前へ遡及しない。
+   - 実施。strictは台湾archive snapshotと韓国の実公表日付き月次履歴、provisionalは台湾current CSVと現行韓国データへ入力分離した。台湾snapshotは2022-08～2026-01の42か月・84行・欠損0。韓国は現行の2023-06開始を維持し、台湾＋韓国複合条件はそれ以前へ遡及しない。台湾相関標本は主要4資産で42、キオクシアで15へ増えたが、相関は期間・資産で一貫せず、複合条件は8件（キオクシア4件）で低標本警告が残る。結果は公表後の関係として表示し、Cycle Scoreや売買シグナルへ昇格させない。
 3. 米国Big TechのAI関連設備投資（CapEx）分析（中期）
    - Japan Core 20 / Macro Sensitivityと今後の個別株分析に一定の目途がついた後、Microsoft、Alphabet / Google、Amazon、Metaを中心に着手する。必要に応じてOracle、Apple、その他主要Cloud / Hyperscalerも検討する。
    - 四半期CapEx、前年比、前四半期比、トレンド、Guidance、AI / Data Center関連の投資額・計画、各社合計CapEx、合計前年比、CapEx momentumを候補とする。
@@ -51,6 +51,7 @@
    - Big Tech CapEx / AI Investment → Taiwan Orders → Korea Exports → Japan Production / Shipments / Inventory → Corporate Earnings → Semiconductor Market / SOX → Price vs Fundamentals → Historical Validationという上流から下流の分析導線を検討する。
    - CapEx、Guidance、momentumが台湾受注、韓国輸出、日本の生産・出荷、SOX、日本主要半導体株に先行したかを公表日基準で検証し、Proxy・相関・先行指標を混同しない。
    - 着手時に公式データ、SEC filings / Investor Relations資料、CapEx定義の企業間差、AI関連CapExの抽出可能性、Guidance、公表日管理、Historical Validation手法を改めて調査する。
+   - 次候補。ただし台湾strict拡張後も資産・条件別の低標本警告と期間依存性を確認し、Cycle Scoreは引き続き保留する。
 4. Global Semiconductor Cycle Score（保留）
    - 複数地域・複数資産で安定した有用性を確認できた場合に限り、各要素の寄与を開示する説明可能なスコアを再検討する。
 
