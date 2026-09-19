@@ -38,21 +38,20 @@
 
 目的: 市場価格、台湾の先行需要、韓国の実際の輸出、日本の生産・在庫・設備投資をつなぎ、半導体株の動きとグローバル実需を同じ導線で確認できるようにする。
 
-1. 韓国半導体輸出の長期履歴拡張
-   - [`docs/KOREA_SEMICONDUCTOR_HISTORY_DIAGNOSTIC.md`](docs/KOREA_SEMICONDUCTOR_HISTORY_DIAGNOSTIC.md)でKOSIS / ITSTAT公式表（`DT_092_115_2009_S023`）を限定診断した。1996年1月以降の月次ICT半導体輸出額は確認できたが、月ごとの実公表日と当時vintageを復元できないため、厳密Historical Validation延長は**NO-GO**とする。
-   - 現行の実公表日付きICT履歴（live確認で2023年6月以降）を維持する。KOSIS値は既存系列へmergeせず、公式の実公表日・当初値archiveまたはrevision履歴を確認できた場合だけ再開する。長期チャート等に必要となった場合は、別series・current snapshot・厳密検証除外を条件に別PRで検討する。
-2. 台湾データ品質改善
+韓国半導体輸出の長期履歴拡張は終了した。[`docs/KOREA_SEMICONDUCTOR_HISTORY_DIAGNOSTIC.md`](docs/KOREA_SEMICONDUCTOR_HISTORY_DIAGNOSTIC.md)でKOSIS / ITSTATを、[`docs/KOREA_ICT_ARCHIVE_DIAGNOSTIC.md`](docs/KOREA_ICT_ARCHIVE_DIAGNOSTIC.md)で旧MSIT公式記事archiveを診断したが、2021年以降の実公表日と当時値を連続して自動復元できないため、厳密Historical Validation延長は**NO-GO**とする。現行の2023年6月開始を維持し、同じ経路の調査は反復しない。
+
+1. 台湾データ品質改善
    - 台湾輸出受注の過去公表日と当時公表値を取得できる公式経路を調査し、対象月と実際の利用可能日を分離する。
-3. 海外Historical Validation拡張
-   - 韓国・台湾の厳密検証期間を拡張し、複数資産で先行性と条件付きリターンの安定性を再確認する。
-4. 米国Big TechのAI関連設備投資（CapEx）分析（中期）
+2. 海外Historical Validation拡張
+   - 台湾の厳密検証期間を拡張できた場合、複数資産で先行性と条件付きリターンの安定性を再確認する。韓国は現行の2023年6月開始を維持する。
+3. 米国Big TechのAI関連設備投資（CapEx）分析（中期）
    - Japan Core 20 / Macro Sensitivityと今後の個別株分析に一定の目途がついた後、Microsoft、Alphabet / Google、Amazon、Metaを中心に着手する。必要に応じてOracle、Apple、その他主要Cloud / Hyperscalerも検討する。
    - 四半期CapEx、前年比、前四半期比、トレンド、Guidance、AI / Data Center関連の投資額・計画、各社合計CapEx、合計前年比、CapEx momentumを候補とする。
    - 会計上のCapEx全体とAI専用CapExを混同せず、企業間の定義差と、AI関連額を公式に分離できる範囲を明示する。
    - Big Tech CapEx / AI Investment → Taiwan Orders → Korea Exports → Japan Production / Shipments / Inventory → Corporate Earnings → Semiconductor Market / SOX → Price vs Fundamentals → Historical Validationという上流から下流の分析導線を検討する。
    - CapEx、Guidance、momentumが台湾受注、韓国輸出、日本の生産・出荷、SOX、日本主要半導体株に先行したかを公表日基準で検証し、Proxy・相関・先行指標を混同しない。
    - 着手時に公式データ、SEC filings / Investor Relations資料、CapEx定義の企業間差、AI関連CapExの抽出可能性、Guidance、公表日管理、Historical Validation手法を改めて調査する。
-5. Global Semiconductor Cycle Score（保留）
+4. Global Semiconductor Cycle Score（保留）
    - 複数地域・複数資産で安定した有用性を確認できた場合に限り、各要素の寄与を開示する説明可能なスコアを再検討する。
 
 共通原則:
