@@ -185,8 +185,11 @@ class TaiwanArchiveLoaderTest(unittest.TestCase):
             start_period="2021-01", end_period="2021-01", http_client=client
         )
         self.assertEqual(frame.iloc[0]["release_date"], pd.Timestamp("2021-02-24"))
-        self.assertIsNone(parse_attachment.call_args.kwargs["release_date"])
-        self.assertIn("file_id=84972", parse_attachment.call_args.args[1])
+        self.assertEqual(
+            parse_attachment.call_args.kwargs["release_date"],
+            pd.Timestamp("2021-02-24"),
+        )
+        self.assertEqual(parse_attachment.call_args.args[1], "https://official/book")
 
     @patch("data_loader.parse_taiwan_export_orders_archive_attachment")
     @patch("data_loader.parse_taiwan_archive_article")

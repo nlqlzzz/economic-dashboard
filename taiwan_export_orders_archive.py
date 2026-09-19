@@ -36,13 +36,10 @@ TAIWAN_ARCHIVE_REQUEST_HEADERS = {
         "+https://github.com/nlqlzzz/economic-dashboard)"
     )
 }
-# 公式news historyのローリング範囲外だが、PR84で公式PDFをlive確認済み。
-# IDは生成・推測せず、確認済みURLだけをlegacy seedとして明示する。
-TAIWAN_ARCHIVE_VERIFIED_LEGACY_ATTACHMENTS = {
-    pd.Timestamp("2021-01-01"): (
-        "https://www.moea.gov.tw/MNS/populace/news/"
-        "wHandNews_File.ashx?file_id=84972"
-    ),
+# 公式news historyのローリング範囲外だが、PR84で公式新聞稿をlive確認済み。
+# 一般公表ルールから推定せず、確認済みの日付だけをlegacy manifestに置く。
+TAIWAN_ARCHIVE_VERIFIED_LEGACY_RELEASE_DATES = {
+    pd.Timestamp("2021-01-01"): pd.Timestamp("2021-02-24"),
 }
 
 

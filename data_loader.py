@@ -25,7 +25,7 @@ from taiwan_export_orders_archive import (
     TAIWAN_ARCHIVE_DEFAULT_START,
     TAIWAN_EXPORT_ORDERS_ARCHIVE_URL,
     TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL,
-    TAIWAN_ARCHIVE_VERIFIED_LEGACY_ATTACHMENTS,
+    TAIWAN_ARCHIVE_VERIFIED_LEGACY_RELEASE_DATES,
     TaiwanArchiveHttpClient,
     discover_taiwan_export_order_releases,
     build_taiwan_news_archive_search_form,
@@ -459,13 +459,14 @@ def _load_taiwan_semiconductor_orders_archive(
                     TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL,
                 )
             except ValueError:
-                attachment_url = TAIWAN_ARCHIVE_VERIFIED_LEGACY_ATTACHMENTS.get(
+                release_date = TAIWAN_ARCHIVE_VERIFIED_LEGACY_RELEASE_DATES.get(
                     release.reference_period
                 )
-                if attachment_url is None:
+                if release_date is None:
                     raise
                 period = release.reference_period
-                release_date = None
+                # 添付URLはmanifestで生成せず、公式速報一覧に現存するリンクを使う。
+                attachment_url = release.article_url
                 article_url = attachment_url
             else:
                 article = client.get_text(article_url)
