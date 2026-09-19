@@ -159,6 +159,36 @@ class TaiwanArchiveParserTest(unittest.TestCase):
 
 class TaiwanArchiveLoaderTest(unittest.TestCase):
     @patch("data_loader.parse_taiwan_export_orders_archive_attachment")
+    @patch("data_loader.discover_taiwan_export_order_releases")
+    def test_verified_legacy_pdf_uses_its_own_date_without_current_fallback(
+        self, discover, parse_attachment
+    ) -> None:
+        client = Mock(spec=TaiwanArchiveHttpClient)
+        client.minimum_interval_seconds = 3.0
+        client.get_text.side_effect = [
+            "listing", '<input type="hidden" name="__VIEWSTATE" value="state">',
+        ]
+        client.post_text.return_value = "no matching news article"
+        client.get_attachment.return_value = (b"%PDF fixture", "application/pdf")
+        discover.return_value = [
+            TaiwanArchiveRelease(
+                pd.Timestamp("2021-01-01"), "https://official/book", "110年1月"
+            )
+        ]
+        parsed = parse_taiwan_export_orders_archive_text(
+            release_text("110年1月", "110.2.24", "150.9", "增", "55.6", "169.3", "增", "64.3"),
+            "https://official/press.pdf", pd.Timestamp("2026-09-19"),
+        )
+        parsed.attrs["attachment_sha256"] = "legacy"
+        parse_attachment.return_value = parsed
+        frame = _load_taiwan_semiconductor_orders_archive(
+            start_period="2021-01", end_period="2021-01", http_client=client
+        )
+        self.assertEqual(frame.iloc[0]["release_date"], pd.Timestamp("2021-02-24"))
+        self.assertIsNone(parse_attachment.call_args.kwargs["release_date"])
+        self.assertIn("file_id=84972", parse_attachment.call_args.args[1])
+
+    @patch("data_loader.parse_taiwan_export_orders_archive_attachment")
     @patch("data_loader.parse_taiwan_archive_article")
     @patch("data_loader.discover_taiwan_export_order_releases")
     def test_loader_is_independent_and_reports_coverage(

@@ -36,6 +36,14 @@ TAIWAN_ARCHIVE_REQUEST_HEADERS = {
         "+https://github.com/nlqlzzz/economic-dashboard)"
     )
 }
+# 公式news historyのローリング範囲外だが、PR84で公式PDFをlive確認済み。
+# IDは生成・推測せず、確認済みURLだけをlegacy seedとして明示する。
+TAIWAN_ARCHIVE_VERIFIED_LEGACY_ATTACHMENTS = {
+    pd.Timestamp("2021-01-01"): (
+        "https://www.moea.gov.tw/MNS/populace/news/"
+        "wHandNews_File.ashx?file_id=84972"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -382,7 +390,7 @@ def parse_taiwan_export_orders_archive_attachment(
     fetched_at: pd.Timestamp,
     *,
     reference_period: pd.Timestamp,
-    release_date: pd.Timestamp,
+    release_date: pd.Timestamp | None,
 ) -> pd.DataFrame:
     """XLSXまたはテキストPDFから当時値を抽出する。OCRは行わない。"""
     if content.startswith(b"PK"):

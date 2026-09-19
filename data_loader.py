@@ -25,6 +25,7 @@ from taiwan_export_orders_archive import (
     TAIWAN_ARCHIVE_DEFAULT_START,
     TAIWAN_EXPORT_ORDERS_ARCHIVE_URL,
     TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL,
+    TAIWAN_ARCHIVE_VERIFIED_LEGACY_ATTACHMENTS,
     TaiwanArchiveHttpClient,
     discover_taiwan_export_order_releases,
     build_taiwan_news_archive_search_form,
@@ -444,25 +445,36 @@ def _load_taiwan_semiconductor_orders_archive(
     for release in releases:
         article_url = release.article_url
         try:
-            search_result = client.post_text(
-                TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL,
-                build_taiwan_news_archive_search_form(
-                    news_search_form, release.reference_period
-                ),
-            )
-            total_attempts += 1
-            article_url = parse_taiwan_news_archive_search_result(
-                search_result,
-                release.reference_period,
-                TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL,
-            )
-            article = client.get_text(article_url)
-            total_attempts += 1
-            period, release_date, attachment_url = parse_taiwan_archive_article(
-                article, article_url
-            )
-            if period != release.reference_period:
-                raise DataSchemaError("archive一覧と記事の対象月が一致しません。")
+            try:
+                search_result = client.post_text(
+                    TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL,
+                    build_taiwan_news_archive_search_form(
+                        news_search_form, release.reference_period
+                    ),
+                )
+                total_attempts += 1
+                article_url = parse_taiwan_news_archive_search_result(
+                    search_result,
+                    release.reference_period,
+                    TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL,
+                )
+            except ValueError:
+                attachment_url = TAIWAN_ARCHIVE_VERIFIED_LEGACY_ATTACHMENTS.get(
+                    release.reference_period
+                )
+                if attachment_url is None:
+                    raise
+                period = release.reference_period
+                release_date = None
+                article_url = attachment_url
+            else:
+                article = client.get_text(article_url)
+                total_attempts += 1
+                period, release_date, attachment_url = parse_taiwan_archive_article(
+                    article, article_url
+                )
+                if period != release.reference_period:
+                    raise DataSchemaError("archive一覧と記事の対象月が一致しません。")
             attachment, content_type = client.get_attachment(attachment_url)
             total_attempts += 1
             parsed = parse_taiwan_export_orders_archive_attachment(
