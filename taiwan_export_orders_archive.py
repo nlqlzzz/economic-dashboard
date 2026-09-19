@@ -163,7 +163,7 @@ def discover_taiwan_export_order_releases(
 
     parser = _LinkParser()
     parser.feed(html)
-    releases: dict[pd.Timestamp, TaiwanArchiveRelease] = {}
+    releases: dict[pd.Timestamp, tuple[int, TaiwanArchiveRelease]] = {}
     for raw_title, attrs in parser.links:
         title = _compact_text(raw_title or attrs.get("title", ""))
         period = _parse_roc_month(title)
@@ -184,8 +184,26 @@ def discover_taiwan_export_order_releases(
             continue
         article_url = urljoin(source_url, unescape(href))
         if article_url.lower().startswith(("http://", "https://")):
-            releases[period] = TaiwanArchiveRelease(period, article_url, title)
-    return [releases[period] for period in sorted(releases)]
+            candidate = TaiwanArchiveRelease(period, article_url, title)
+            priority = _archive_link_priority(article_url)
+            current = releases.get(period)
+            if current is None or priority < current[0]:
+                releases[period] = (priority, candidate)
+    return [releases[period][1] for period in sorted(releases)]
+
+
+def _archive_link_priority(url: str) -> int:
+    """同月の公式リンクでは記事を表・旧file handlerより優先する。"""
+    lowered = url.lower()
+    if "news.aspx" in lowered:
+        return 0
+    if "whandnews_file.ashx" in lowered:
+        return 1
+    if "whandpublish_file.ashx" in lowered:
+        return 2
+    if "whandmenufile.ashx" in lowered:
+        return 3
+    return 4
 
 
 def parse_taiwan_archive_article(

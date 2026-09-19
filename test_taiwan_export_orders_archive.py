@@ -50,6 +50,17 @@ class TaiwanArchiveParserTest(unittest.TestCase):
         ])
         self.assertIn("menu_id=43542", releases[-1].article_url)
 
+    def test_discovery_prefers_official_article_over_same_month_table(self) -> None:
+        html = """
+        <a href="/MNS/populace/news/News.aspx?news_id=118607">114年1月</a>
+        <a href="/Mns/DOS/content/wHandMenuFile.ashx?file_id=36078">114年1月</a>
+        """
+        releases = discover_taiwan_export_order_releases(
+            html, "https://www.moea.gov.tw/archive"
+        )
+        self.assertEqual(len(releases), 1)
+        self.assertIn("News.aspx", releases[0].article_url)
+
     def test_rejects_pre_2021_start(self) -> None:
         with self.assertRaisesRegex(ValueError, "2021-01"):
             discover_taiwan_export_order_releases("", start_period="2020-12")
