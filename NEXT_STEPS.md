@@ -45,9 +45,9 @@
 2. 海外Historical Validation拡張
    - 実施。strictは台湾archive snapshotと韓国の実公表日付き月次履歴、provisionalは台湾current CSVと現行韓国データへ入力分離した。台湾snapshotは2022-08～2026-01の42か月・84行・欠損0。韓国は現行の2023-06開始を維持し、台湾＋韓国複合条件はそれ以前へ遡及しない。台湾相関標本は主要4資産で42、キオクシアで15へ増えたが、相関は期間・資産で一貫せず、複合条件は8件（キオクシア4件）で低標本警告が残る。結果は公表後の関係として表示し、Cycle Scoreや売買シグナルへ昇格させない。
 3. 米国Big TechのAI関連設備投資（CapEx）限定採否調査
-   - [`docs/BIGTECH_CAPEX_FIT_DIAGNOSTIC.md`](docs/BIGTECH_CAPEX_FIT_DIAGNOSTIC.md)で2026-09-19時点の最新側から4社×2～3開示を一度だけ診断した。Microsoft / Alphabet / Metaは同一対象年度のguidance、定義差、公表時点、AI / Data Center用途を公式資料で追跡でき、既存台湾・韓国より上流の計画確認として追加価値があるためADOPT。Microsoftの190→175は経済的投資計画の引下げではなくlease分類変更として扱う。Amazonは同一CY2026の数値guidanceを2回以上確認できずDO NOT ADOPTとした。
-   - 全体は**限定GO**だが、意味は「Microsoft / Alphabet / Metaだけの小さなリサーチ機能を要件検討する価値がある」に限る。本実装は未決定であり、ユーザー判断なしにloader、UI、DB、Decision Log連携、自動更新へ進まない。今回の調査で一度区切り、別API・ベンダー・archiveを連鎖調査しない。
-   - 半導体大型拡張は停止し、Cycle Scoreは引き続き保留する。売買予測力は今回の少数事例では評価しない。
+   - 限定採否調査は完了。[`docs/BIGTECH_CAPEX_FIT_DIAGNOSTIC.md`](docs/BIGTECH_CAPEX_FIT_DIAGNOSTIC.md)でMicrosoft / Alphabet / MetaをADOPT、AmazonをDO NOT ADOPTとした。
+   - [`docs/BIGTECH_CAPEX_RESEARCH.md`](docs/BIGTECH_CAPEX_RESEARCH.md)の小規模リサーチ機能を実装済み。採用3社の公式開示8件をrepo内JSONで手動更新し、reported CapEx、定義・lease変更、economic plan、公式用途を分けて表示する。Microsoftの190→175は減額ではなく定義変更・economic plan据え置きとして扱う。
+   - Decision Log最優先は維持し、本機能とは連携しない。live取得・自動更新・売買予測力評価は未実装。半導体大型拡張は停止し、Cycle Scoreは引き続き保留する。
 4. Global Semiconductor Cycle Score（保留）
    - 複数地域・複数資産で安定した有用性を確認できた場合に限り、各要素の寄与を開示する説明可能なスコアを再検討する。
 

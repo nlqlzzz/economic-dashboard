@@ -4,6 +4,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from bigtech_capex import (
+    build_bigtech_capex_summaries,
+    format_guidance,
+    load_bigtech_capex_research,
+)
 from chart_interaction import exploratory_chart_config
 
 from global_semiconductor_demand import (
@@ -124,6 +129,68 @@ def render_semiconductor_market_compact(
     )
     display["データ日"] = display["データ日"].dt.strftime("%Y-%m-%d")
     st.dataframe(display.drop(columns="変化単位"), hide_index=True, width="stretch")
+
+
+def render_bigtech_capex_research(dataset_path: str | None = None) -> None:
+    """Render the manual, official-source CapEx research without blocking other sections."""
+    st.markdown("#### Big Tech AI / Data Center投資計画")
+    try:
+        dataset = load_bigtech_capex_research(dataset_path)
+        summaries = build_bigtech_capex_summaries(dataset["records"])
+    except Exception:
+        st.warning("Big Tech CapExデータを表示できません。台湾・韓国・日本の表示は継続します。")
+        return
+
+    st.caption(
+        f"データ最終更新: {dataset['dataset_updated_at']:%Y-%m-%d}｜"
+        "公式IR / SECを手動確認して更新しています。自動取得データではありません。"
+    )
+    st.caption("総CapExはAI専用投資額ではありません。投資計画と後続実需を確認するための判断材料で、売買シグナルではありません。")
+    for summary in summaries:
+        with st.container(border=True):
+            st.markdown(f"##### {summary['company']}")
+            st.caption(f"{summary['target_year']} reported CapEx guidance")
+            st.markdown(
+                f"**{summary['previous_guidance']}**  \n→ **{summary['current_guidance']}**"
+            )
+            st.markdown(f"**{summary['change_label_ja']}**")
+            if summary["comparison_status"] == "caveat":
+                st.caption("⚠️ 比較注意: " + summary["comparison_note"])
+            if summary["comparison_status"] == "definition_changed":
+                st.info(
+                    "将来のデータセンターleaseの一部がfinance leaseからoperating leaseへ移るため、"
+                    "reported CapExは低下します。会社説明上のeconomic investment planは据え置きです。"
+                )
+            if summary["economic_plan_change"] != "unknown":
+                st.caption(f"経済的投資計画: {summary['economic_plan_change_ja']}")
+            st.caption(f"最新開示: {summary['published_at']:%Y-%m-%d}")
+            st.markdown(f"**公式用途:** {summary['official_use_summary']}")
+            st.markdown("**当アプリの確認事項**")
+            st.caption(summary["context"]["next_check"])
+            st.caption(summary["context"]["demand_check"])
+
+    with st.expander("開示履歴・定義・出典を見る"):
+        for summary in summaries:
+            st.markdown(f"##### {summary['company']}")
+            for record in reversed(summary["history"]):
+                actual = record["actual_capex_bn"]
+                actual_text = "—" if actual is None else f"{float(actual):g} bn USD"
+                st.markdown(f"**{record['disclosure_label']}｜{record['published_at']:%Y-%m-%d}**")
+                st.caption(
+                    f"Target: {record['target_year']}｜Actual: {actual_text}｜"
+                    f"Guidance: {format_guidance(record)}｜Comparison: {record['comparison_status']}"
+                )
+                st.caption(f"Definition: {record['capex_definition']}")
+                st.caption(f"Lease: {record['lease_treatment']}")
+                st.caption(f"Official use: {record['official_use_summary']}")
+                if record.get("comparison_note"):
+                    st.caption(f"Note: {record['comparison_note']}")
+                st.markdown(f"[公式資料（{record['source_type']}）]({record['source_url']})")
+                st.divider()
+    st.caption(
+        "仮説経路: AI / Data Center投資 → server / accelerator / memory / networking需要 → "
+        "Taiwan Orders → Korea Exports → 日本の半導体生産・装置。直接的な株価因果を示すものではありません。"
+    )
 
 
 def build_current_global_pulse(

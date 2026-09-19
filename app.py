@@ -92,6 +92,7 @@ from similar_periods import (
 )
 from semiconductor_view import (
     build_current_global_pulse,
+    render_bigtech_capex_research,
     render_global_demand,
     render_global_semiconductor_pulse,
     render_overseas_historical_validation,
@@ -1879,6 +1880,9 @@ if main_view == "投資テーマ":
             )
             st.divider()
             render_semiconductor_market_compact(theme_series, INDICATORS)
+            st.divider()
+            render_bigtech_capex_research()
+            st.divider()
             render_global_demand(
                 taiwan_orders,
                 korea_exports,
