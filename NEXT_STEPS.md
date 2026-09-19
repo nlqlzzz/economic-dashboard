@@ -41,9 +41,9 @@
 韓国半導体輸出の長期履歴拡張は終了した。[`docs/KOREA_SEMICONDUCTOR_HISTORY_DIAGNOSTIC.md`](docs/KOREA_SEMICONDUCTOR_HISTORY_DIAGNOSTIC.md)でKOSIS / ITSTATを、[`docs/KOREA_ICT_ARCHIVE_DIAGNOSTIC.md`](docs/KOREA_ICT_ARCHIVE_DIAGNOSTIC.md)で旧MSIT公式記事archiveを診断したが、2021年以降の実公表日と当時値を連続して自動復元できないため、厳密Historical Validation延長は**NO-GO**とする。現行の2023年6月開始を維持し、同じ経路の調査は反復しない。
 
 1. 台湾データ品質改善
-   - 台湾輸出受注の過去公表日と当時公表値を取得できる公式経路を調査し、対象月と実際の利用可能日を分離する。
+   - [`docs/TAIWAN_EXPORT_ORDERS_HISTORY_DIAGNOSTIC.md`](docs/TAIWAN_EXPORT_ORDERS_HISTORY_DIAGNOSTIC.md)で、公式「外銷訂單統計速報」archiveには実公表日、当時の商品別金額、公式前年比が対で残り、2021年1月以降を初期範囲とする厳密履歴拡張を**GO**と判定した。現行CSVが当時値から改定された月を確認したため、次PRではarchive vintageをcurrent CSVと分離して取得し、公表日を推測しない。
 2. 海外Historical Validation拡張
-   - 台湾の厳密検証期間を拡張できた場合、複数資産で先行性と条件付きリターンの安定性を再確認する。韓国は現行の2023年6月開始を維持する。
+   - 台湾archive loaderを実装・fixture／live確認した後にだけ、2021年1月以降の厳密検証へ接続し、複数資産で先行性と条件付きリターンの安定性を再確認する。韓国は現行の2023年6月開始を維持し、台湾＋韓国の複合条件をそれ以前へ遡及しない。
 3. 米国Big TechのAI関連設備投資（CapEx）分析（中期）
    - Japan Core 20 / Macro Sensitivityと今後の個別株分析に一定の目途がついた後、Microsoft、Alphabet / Google、Amazon、Metaを中心に着手する。必要に応じてOracle、Apple、その他主要Cloud / Hyperscalerも検討する。
    - 四半期CapEx、前年比、前四半期比、トレンド、Guidance、AI / Data Center関連の投資額・計画、各社合計CapEx、合計前年比、CapEx momentumを候補とする。
