@@ -1,6 +1,6 @@
 # Big Tech AI関連CapEx 限定採否診断
 
-調査日: 2026-09-19  
+調査日: 2026-09-19
 判定: **限定GO（Alphabet / MetaのみADOPT）**
 
 ## 1. 調査目的
