@@ -62,9 +62,13 @@ class TaiwanArchiveHttpClient:
 
     def get_text(self, url: str) -> str:
         response = self._request(url)
-        if not response.text.strip():
+        try:
+            text = response.content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = response.text
+        if not text.strip():
             raise ValueError(f"台湾archive公式ページが空です: {url}")
-        return response.text
+        return text
 
     def get_attachment(self, url: str) -> tuple[bytes, str]:
         response = self._request(url)

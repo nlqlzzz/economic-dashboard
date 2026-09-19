@@ -28,6 +28,20 @@ def main() -> int:
         )
         return 1
 
+    if frame.empty or frame.attrs.get("failed_months"):
+        print(
+            json.dumps(
+                {
+                    "status": "incomplete",
+                    "loaded_rows": len(frame),
+                    "failed_months": frame.attrs.get("failed_months", []),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+
     fields = [
         "reference_period",
         "release_date",

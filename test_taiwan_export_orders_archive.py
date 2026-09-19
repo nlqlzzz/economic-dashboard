@@ -275,6 +275,17 @@ class TaiwanArchiveHttpClientTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "PDF/XLSX"):
             client.get_attachment("https://official.example/file.pdf")
 
+    def test_decodes_official_utf8_when_http_header_omits_charset(self) -> None:
+        session = Mock()
+        session.get.return_value = self.response(
+            200, "110年1月外銷訂單".encode("utf-8")
+        )
+        client = TaiwanArchiveHttpClient(
+            session=session, sleeper=Mock(), clock=lambda: 0.0,
+            minimum_interval_seconds=0,
+        )
+        self.assertIn("110年1月", client.get_text("https://official.example"))
+
 
 if __name__ == "__main__":
     unittest.main()
