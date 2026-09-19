@@ -8,8 +8,10 @@ from global_semiconductor_demand import SEMICONDUCTOR_DATA_COLUMNS
 from taiwan_export_orders_archive import (
     TaiwanArchiveRelease,
     TaiwanArchiveHttpClient,
+    build_taiwan_news_archive_search_form,
     discover_taiwan_export_order_releases,
     parse_taiwan_archive_article,
+    parse_taiwan_news_archive_search_result,
     parse_taiwan_export_orders_archive_text,
 )
 from data_loader import _load_taiwan_semiconductor_orders_archive
@@ -64,6 +66,25 @@ class TaiwanArchiveParserTest(unittest.TestCase):
     def test_rejects_pre_2021_start(self) -> None:
         with self.assertRaisesRegex(ValueError, "2021-01"):
             discover_taiwan_export_order_releases("", start_period="2020-12")
+
+    def test_official_news_search_resolves_only_exact_month(self) -> None:
+        form = build_taiwan_news_archive_search_form(
+            '<input type="hidden" name="__VIEWSTATE" value="state">',
+            pd.Timestamp("2023-06-01"),
+        )
+        self.assertEqual(
+            form["ctl00$holderContent$txtQ_Title"], "112年6月外銷訂單統計"
+        )
+        result = """
+        <a href="../news/News.aspx?kind=1&amp;menu_id=40&amp;news_id=110612">
+          112年6月外銷訂單統計
+        </a>
+        """
+        url = parse_taiwan_news_archive_search_result(
+            result, pd.Timestamp("2023-06-01"),
+            "https://www.moea.gov.tw/MNS/populace/news/News.aspx",
+        )
+        self.assertIn("news_id=110612", url)
 
     def test_article_uses_actual_timestamp_and_prefers_stable_press_pdf(self) -> None:
         html = """
@@ -145,7 +166,14 @@ class TaiwanArchiveLoaderTest(unittest.TestCase):
     ) -> None:
         client = Mock(spec=TaiwanArchiveHttpClient)
         client.minimum_interval_seconds = 3.0
-        client.get_text.side_effect = ["listing", "article-a", "article-b"]
+        client.get_text.side_effect = [
+            "listing", '<input type="hidden" name="__VIEWSTATE" value="state">',
+            "article-a", "article-b",
+        ]
+        client.post_text.side_effect = [
+            '<a href="News.aspx?news_id=1">110年1月外銷訂單統計</a>',
+            '<a href="News.aspx?news_id=2">110年3月外銷訂單統計</a>',
+        ]
         client.get_attachment.side_effect = [
             (b"file-a", "application/pdf"),
             (b"file-b", "application/pdf"),
@@ -188,7 +216,14 @@ class TaiwanArchiveLoaderTest(unittest.TestCase):
     ) -> None:
         client = Mock(spec=TaiwanArchiveHttpClient)
         client.minimum_interval_seconds = 3.0
-        client.get_text.side_effect = ["listing", "article-2021", "article-2025"]
+        client.get_text.side_effect = [
+            "listing", '<input type="hidden" name="__VIEWSTATE" value="state">',
+            "article-2021", "article-2025",
+        ]
+        client.post_text.side_effect = [
+            '<a href="News.aspx?news_id=1">110年1月外銷訂單統計</a>',
+            '<a href="News.aspx?news_id=2">114年1月外銷訂單統計</a>',
+        ]
         client.get_attachment.side_effect = [
             (b"file-2021", "application/pdf"),
             (b"file-2025", "application/pdf"),

@@ -24,8 +24,11 @@ from global_semiconductor_demand import (
 from taiwan_export_orders_archive import (
     TAIWAN_ARCHIVE_DEFAULT_START,
     TAIWAN_EXPORT_ORDERS_ARCHIVE_URL,
+    TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL,
     TaiwanArchiveHttpClient,
     discover_taiwan_export_order_releases,
+    build_taiwan_news_archive_search_form,
+    parse_taiwan_news_archive_search_result,
     empty_taiwan_archive_frame,
     parse_taiwan_archive_article,
     parse_taiwan_export_orders_archive_attachment,
@@ -415,7 +418,6 @@ def _load_taiwan_semiconductor_orders_archive(
     fetched_at = pd.Timestamp.now(tz="Asia/Tokyo")
     client = http_client or TaiwanArchiveHttpClient()
     listing = client.get_text(TAIWAN_EXPORT_ORDERS_ARCHIVE_URL)
-    listing_attempts = 1
     releases = discover_taiwan_export_order_releases(
         listing,
         TAIWAN_EXPORT_ORDERS_ARCHIVE_URL,
@@ -433,16 +435,31 @@ def _load_taiwan_semiconductor_orders_archive(
             missing_label = ", ".join(item.strftime("%Y-%m") for item in missing_requested)
             raise DataUnavailableError(f"台湾archiveに代表月がありません: {missing_label}")
 
+    news_search_form = client.get_text(TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL)
+    total_attempts = 2
+
     frames: list[pd.DataFrame] = []
     failures: list[dict[str, str]] = []
     hashes: dict[str, str] = {}
-    total_attempts = listing_attempts
     for release in releases:
+        article_url = release.article_url
         try:
-            article = client.get_text(release.article_url)
+            search_result = client.post_text(
+                TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL,
+                build_taiwan_news_archive_search_form(
+                    news_search_form, release.reference_period
+                ),
+            )
+            total_attempts += 1
+            article_url = parse_taiwan_news_archive_search_result(
+                search_result,
+                release.reference_period,
+                TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL,
+            )
+            article = client.get_text(article_url)
             total_attempts += 1
             period, release_date, attachment_url = parse_taiwan_archive_article(
-                article, release.article_url
+                article, article_url
             )
             if period != release.reference_period:
                 raise DataSchemaError("archive一覧と記事の対象月が一致しません。")
@@ -462,7 +479,7 @@ def _load_taiwan_semiconductor_orders_archive(
             failures.append(
                 {
                     "reference_period": release.reference_period.strftime("%Y-%m"),
-                    "article_url": release.article_url,
+                    "article_url": article_url,
                     "error_type": type(error).__name__,
                     "detail": str(error),
                 }

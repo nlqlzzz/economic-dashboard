@@ -23,6 +23,10 @@ from global_semiconductor_demand import (
 TAIWAN_EXPORT_ORDERS_ARCHIVE_URL = (
     "https://www.moea.gov.tw/Mns/dos/content/ContentLink.aspx?menu_id=9423"
 )
+TAIWAN_EXPORT_ORDERS_NEWS_ARCHIVE_URL = (
+    "https://www.moea.gov.tw/MNS/populace/news/News.aspx"
+    "?kind=1&menu_id=40&history=y"
+)
 TAIWAN_ARCHIVE_DEFAULT_START = pd.Timestamp("2021-01-01")
 TAIWAN_ARCHIVE_MIN_REQUEST_INTERVAL_SECONDS = 3.0
 TAIWAN_ARCHIVE_429_BACKOFF_SECONDS = (5.0, 15.0, 30.0)
@@ -81,15 +85,30 @@ class TaiwanArchiveHttpClient:
             )
         return content, content_type
 
-    def _request(self, url: str) -> requests.Response:
+    def post_text(self, url: str, data: dict[str, str]) -> str:
+        response = self._request(url, data=data)
+        try:
+            text = response.content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = response.text
+        if not text.strip():
+            raise ValueError(f"台湾archive公式検索結果が空です: {url}")
+        return text
+
+    def _request(
+        self, url: str, *, data: dict[str, str] | None = None
+    ) -> requests.Response:
         maximum_attempts = 1 + len(self.backoff_seconds)
         for attempt in range(maximum_attempts):
             self._wait_for_request_slot()
-            response = self.session.get(
-                url,
-                headers=TAIWAN_ARCHIVE_REQUEST_HEADERS,
-                timeout=30,
-            )
+            headers = dict(TAIWAN_ARCHIVE_REQUEST_HEADERS)
+            if data is None:
+                response = self.session.get(url, headers=headers, timeout=30)
+            else:
+                headers.update({"Referer": url, "Origin": "https://www.moea.gov.tw"})
+                response = self.session.post(
+                    url, data=data, headers=headers, timeout=30
+                )
             self._last_request_at = self.clock()
             if response.status_code != 429:
                 response.raise_for_status()
@@ -141,6 +160,20 @@ class _LinkParser(HTMLParser):
             self.links.append((" ".join(self.parts), self.current))
             self.current = None
             self.parts = []
+
+
+class _HiddenInputParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.values: dict[str, str] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "input":
+            return
+        attributes = {key.lower(): value or "" for key, value in attrs}
+        if attributes.get("type", "").lower() != "hidden" or not attributes.get("name"):
+            return
+        self.values[attributes["name"]] = attributes.get("value", "")
 
 
 def discover_taiwan_export_order_releases(
@@ -204,6 +237,42 @@ def _archive_link_priority(url: str) -> int:
     if "whandmenufile.ashx" in lowered:
         return 3
     return 4
+
+
+def build_taiwan_news_archive_search_form(
+    html: str, reference_period: pd.Timestamp
+) -> dict[str, str]:
+    """公式news archiveのhidden stateを保ち、対象月の完全な記事名で検索する。"""
+    parser = _HiddenInputParser()
+    parser.feed(html)
+    if "__VIEWSTATE" not in parser.values:
+        raise ValueError("台湾公式news archiveの検索form schemaが変わりました。")
+    roc_year = reference_period.year - 1911
+    query = f"{roc_year}年{reference_period.month}月外銷訂單統計"
+    parser.values.update(
+        {
+            "ctl00$holderContent$txtQ_Title": query,
+            "ctl00$holderContent$uctlQ_PageSize$ddlQ_PageSize": "30",
+            "ctl00$holderContent$btnQuery": "查詢",
+        }
+    )
+    return parser.values
+
+
+def parse_taiwan_news_archive_search_result(
+    html: str, reference_period: pd.Timestamp, source_url: str
+) -> str:
+    """公式検索結果に明示された対象月の記事URLだけを返す。"""
+    parser = _LinkParser()
+    parser.feed(html)
+    expected = f"{reference_period.year - 1911}年{reference_period.month}月外銷訂單統計"
+    for raw_title, attrs in parser.links:
+        title = _compact_text(raw_title or attrs.get("title", ""))
+        href = attrs.get("href", "").strip()
+        if title != expected or "news.aspx" not in href.lower() or "news_id=" not in href.lower():
+            continue
+        return urljoin(source_url, unescape(href))
+    raise ValueError(f"台湾公式news archiveで{reference_period:%Y-%m}の記事を発見できません。")
 
 
 def parse_taiwan_archive_article(
