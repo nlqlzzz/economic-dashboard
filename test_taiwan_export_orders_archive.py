@@ -171,6 +171,18 @@ class TaiwanArchiveParserTest(unittest.TestCase):
         self.assertEqual(frame.loc["taiwan_electronic_export_orders", "value"], 17_000)
         self.assertEqual(frame.loc["taiwan_electronic_export_orders", "yoy"], 18.4)
 
+    def test_product_paragraph_accepts_official_ze_modifier(self) -> None:
+        text = """
+        112年5月份外銷訂單統計 DATE 112.6.20 16:00
+        1.資訊通信產品：126.0億美元，較上年同月則減9.5%。
+        2.電子產品：154.7億美元，較上年同月則減16.6%。
+        """
+        frame = parse_taiwan_export_orders_archive_text(
+            text, "https://official.example/2023-05.pdf", pd.Timestamp("2026-09-19")
+        ).set_index("series_id")
+        self.assertEqual(frame.loc["taiwan_information_communication_export_orders", "yoy"], -9.5)
+        self.assertEqual(frame.loc["taiwan_electronic_export_orders", "yoy"], -16.6)
+
     def test_schema_mismatch_fails_without_current_csv_fallback(self) -> None:
         text = "114年1月份外銷訂單統計 DATE 114.2.20 電子產品：177.1億美元，較上年同月增1.5%。"
         with self.assertRaisesRegex(ValueError, "資訊與通信產品"):
@@ -247,6 +259,38 @@ class TaiwanArchiveLoaderTest(unittest.TestCase):
             pd.Timestamp("2021-02-24"),
         )
         self.assertEqual(parse_attachment.call_args.args[1], "https://official/book")
+
+    @patch("data_loader.parse_taiwan_export_orders_archive_attachment")
+    @patch("data_loader.discover_taiwan_export_order_releases")
+    def test_official_direct_attachment_must_supply_its_own_release_date(
+        self, discover, parse_attachment
+    ) -> None:
+        client = Mock(spec=TaiwanArchiveHttpClient)
+        client.minimum_interval_seconds = 3.0
+        client.get_text.side_effect = [
+            "listing", '<input type="hidden" name="__VIEWSTATE" value="state">',
+        ]
+        client.post_text.return_value = "no matching news article"
+        client.get_attachment.return_value = (b"%PDF fixture", "application/pdf")
+        official_attachment = (
+            "https://www.moea.gov.tw/Mns/DOS/content/"
+            "wHandMenuFile.ashx?file_id=38754"
+        )
+        discover.return_value = [
+            TaiwanArchiveRelease(pd.Timestamp("2026-02-01"), official_attachment, "115年2月")
+        ]
+        parsed = parse_taiwan_export_orders_archive_text(
+            release_text("115年2月", "115.3.20 16:00", "120.0", "增", "1.0", "150.0", "增", "2.0"),
+            official_attachment, pd.Timestamp("2026-09-19"),
+        )
+        parsed.attrs["attachment_sha256"] = "direct"
+        parse_attachment.return_value = parsed
+        frame = _load_taiwan_semiconductor_orders_archive(
+            start_period="2026-02", end_period="2026-02", http_client=client
+        )
+        self.assertEqual(len(frame), 2)
+        self.assertIsNone(parse_attachment.call_args.kwargs["release_date"])
+        self.assertEqual(parse_attachment.call_args.args[1], official_attachment)
 
     @patch("data_loader.parse_taiwan_export_orders_archive_attachment")
     @patch("data_loader.parse_taiwan_archive_article")

@@ -24,7 +24,7 @@ from taiwan_export_orders_archive import (
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="台湾外銷訂單archive snapshotを手動更新")
-    parser.add_argument("--start", default="2021-09")
+    parser.add_argument("--start", default="2022-08")
     parser.add_argument("--end", required=True)
     parser.add_argument("--period", action="append", default=[])
     parser.add_argument("--refresh", action="store_true", help="既存月も再取得して差分検知")

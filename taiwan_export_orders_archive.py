@@ -364,7 +364,7 @@ def parse_taiwan_export_orders_archive_text(
         section = tail[: next_heading.start()] if next_heading else tail[:1200]
         amount = re.search(r"([0-9,]+(?:\.[0-9]+)?)\s*億\s*美元", section)
         official_yoy = re.search(
-            r"較\s*上\s*年\s*同\s*月\s*(增|減)\s*([0-9]+(?:\.[0-9]+)?)\s*%",
+            r"較\s*上\s*年\s*同\s*月\s*(?:則\s*)?(增|減)\s*([0-9]+(?:\.[0-9]+)?)\s*%",
             section,
         )
         if amount is None or official_yoy is None:

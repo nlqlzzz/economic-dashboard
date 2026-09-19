@@ -469,11 +469,16 @@ def _load_taiwan_semiconductor_orders_archive(
                 release_date = TAIWAN_ARCHIVE_VERIFIED_LEGACY_RELEASE_DATES.get(
                     release.reference_period
                 )
-                if release_date is None:
+                attachment_url = release.article_url
+                is_official_direct_attachment = (
+                    "moea.gov.tw/" in attachment_url.lower()
+                    and "whandmenufile.ashx" in attachment_url.lower()
+                )
+                if release_date is None and not is_official_direct_attachment:
                     raise
                 period = release.reference_period
-                # 添付URLはmanifestで生成せず、公式速報一覧に現存するリンクを使う。
-                attachment_url = release.article_url
+                # 公式一覧に実在する添付だけを使う。日付manifestがない場合は
+                # 添付本文のDATEをparser自身に確認させ、欠ければfail closedする。
                 article_url = attachment_url
             else:
                 article = client.get_text(article_url)
