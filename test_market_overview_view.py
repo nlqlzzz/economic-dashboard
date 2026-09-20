@@ -7,8 +7,11 @@ from streamlit.testing.v1 import AppTest
 from market_overview_view import (
     LATEST_VALUE_COLUMNS,
     LATEST_VALUE_WIDTH_LIMITS,
+    MARKET_CHART_PLOT_HEIGHT,
+    MARKET_CHART_TOP_MARGIN,
     build_latest_values_table,
     latest_value_column_widths,
+    market_chart_dimensions,
 )
 
 
@@ -81,6 +84,26 @@ class MarketOverviewViewTest(unittest.TestCase):
         table_call = source.index("latest_values_table,")
         table_call_end = source.index(")\n    for name, series", table_call)
         self.assertIn("use_container_width=False", source[table_call:table_call_end])
+
+    def test_many_series_expand_total_chart_without_shrinking_plot_area(self):
+        two_height, two_bottom = market_chart_dimensions(2)
+        eleven_height, eleven_bottom = market_chart_dimensions(11)
+        self.assertGreater(eleven_height, two_height)
+        self.assertGreater(eleven_bottom, two_bottom)
+        self.assertEqual(
+            two_height - MARKET_CHART_TOP_MARGIN - two_bottom,
+            MARKET_CHART_PLOT_HEIGHT,
+        )
+        self.assertEqual(
+            eleven_height - MARKET_CHART_TOP_MARGIN - eleven_bottom,
+            MARKET_CHART_PLOT_HEIGHT,
+        )
+
+    def test_market_chart_uses_dynamic_height_and_bottom_margin(self):
+        source = Path("app.py").read_text(encoding="utf-8")
+        self.assertIn("market_chart_dimensions(len(series_to_plot))", source)
+        self.assertIn("height=chart_height", source)
+        self.assertIn("b=chart_bottom_margin", source)
 
     def test_sidebar_category_can_be_closed_from_bottom(self):
         app = AppTest.from_string(

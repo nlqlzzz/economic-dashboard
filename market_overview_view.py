@@ -25,6 +25,10 @@ LATEST_VALUE_WIDTH_LIMITS = {
     "データ日": (105, 120),
     "データ元": (100, 190),
 }
+MARKET_CHART_PLOT_HEIGHT = 360
+MARKET_CHART_TOP_MARGIN = 30
+MARKET_CHART_LEGEND_ROW_HEIGHT = 27
+MARKET_CHART_LEGEND_GAP = 52
 
 
 def _display_character_width(value: object) -> int:
@@ -45,6 +49,22 @@ def latest_value_column_widths(table: pd.DataFrame) -> dict[str, int]:
         )
         widths[column] = min(maximum, max(minimum, content_width * 8 + 28))
     return widths
+
+
+def market_chart_dimensions(series_count: int) -> tuple[int, int]:
+    """Reserve legend space without reducing the market chart's plot height.
+
+    The legend can wrap to one item per row on a narrow phone, so the sizing is
+    intentionally based on that conservative layout. Wider screens may retain
+    extra whitespace, but the plot area remains stable as series are added.
+    """
+    legend_rows = max(1, series_count)
+    bottom_margin = max(
+        90,
+        MARKET_CHART_LEGEND_GAP + legend_rows * MARKET_CHART_LEGEND_ROW_HEIGHT,
+    )
+    total_height = MARKET_CHART_TOP_MARGIN + MARKET_CHART_PLOT_HEIGHT + bottom_margin
+    return total_height, bottom_margin
 
 
 def build_latest_values_table(
