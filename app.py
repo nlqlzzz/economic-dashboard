@@ -74,6 +74,7 @@ from market_range import (
 from market_range_view import MARKET_RANGE_MOBILE_CSS, render_market_range_selector
 from market_overview_view import (
     build_latest_values_table,
+    latest_value_column_widths,
     render_sidebar_indicator_category,
     set_sidebar_indicator_selected,
 )
@@ -672,17 +673,14 @@ if main_view == "市場概況":
         DATA_SOURCE_LABELS,
         normalized=normalize_values,
     )
+    latest_value_widths = latest_value_column_widths(latest_values_table)
     st.dataframe(
         latest_values_table,
         hide_index=True,
-        use_container_width=True,
+        use_container_width=False,
         column_config={
-            "指標名": st.column_config.TextColumn(width="medium"),
-            "最新の値": st.column_config.TextColumn(width="medium"),
-            "直前の値との比": st.column_config.TextColumn(width="medium"),
-            "重要度": st.column_config.TextColumn(width="small"),
-            "データ日": st.column_config.TextColumn(width="small"),
-            "データ元": st.column_config.TextColumn(width="medium"),
+            column: st.column_config.TextColumn(width=latest_value_widths[column])
+            for column in latest_values_table.columns
         },
     )
     for name, series in series_to_plot.items():
