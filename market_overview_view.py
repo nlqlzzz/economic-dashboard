@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import unicodedata
 
 import pandas as pd
 import streamlit as st
@@ -16,6 +17,54 @@ LATEST_VALUE_COLUMNS = [
     "データ日",
     "データ元",
 ]
+LATEST_VALUE_WIDTH_LIMITS = {
+    "指標名": (110, 220),
+    "最新の値": (90, 160),
+    "直前の値との比": (125, 190),
+    "重要度": (72, 90),
+    "データ日": (105, 120),
+    "データ元": (100, 190),
+}
+MARKET_CHART_PLOT_HEIGHT = 360
+MARKET_CHART_TOP_MARGIN = 30
+MARKET_CHART_LEGEND_ROW_HEIGHT = 27
+MARKET_CHART_LEGEND_GAP = 52
+
+
+def _display_character_width(value: object) -> int:
+    return sum(
+        2 if unicodedata.east_asian_width(character) in {"W", "F", "A"} else 1
+        for character in str(value)
+    )
+
+
+def latest_value_column_widths(table: pd.DataFrame) -> dict[str, int]:
+    """Size columns from visible text, with caps for unusually long indicators."""
+    widths: dict[str, int] = {}
+    for column in LATEST_VALUE_COLUMNS:
+        minimum, maximum = LATEST_VALUE_WIDTH_LIMITS[column]
+        content_width = max(
+            [_display_character_width(column)]
+            + [_display_character_width(value) for value in table[column].fillna("")]
+        )
+        widths[column] = min(maximum, max(minimum, content_width * 8 + 28))
+    return widths
+
+
+def market_chart_dimensions(series_count: int) -> tuple[int, int]:
+    """Reserve legend space without reducing the market chart's plot height.
+
+    The legend can wrap to one item per row on a narrow phone, so the sizing is
+    intentionally based on that conservative layout. Wider screens may retain
+    extra whitespace, but the plot area remains stable as series are added.
+    """
+    legend_rows = max(1, series_count)
+    bottom_margin = max(
+        90,
+        MARKET_CHART_LEGEND_GAP + legend_rows * MARKET_CHART_LEGEND_ROW_HEIGHT,
+    )
+    total_height = MARKET_CHART_TOP_MARGIN + MARKET_CHART_PLOT_HEIGHT + bottom_margin
+    return total_height, bottom_margin
 
 
 def build_latest_values_table(

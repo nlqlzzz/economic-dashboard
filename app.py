@@ -74,6 +74,8 @@ from market_range import (
 from market_range_view import MARKET_RANGE_MOBILE_CSS, render_market_range_selector
 from market_overview_view import (
     build_latest_values_table,
+    latest_value_column_widths,
+    market_chart_dimensions,
     render_sidebar_indicator_category,
     set_sidebar_indicator_selected,
 )
@@ -625,8 +627,9 @@ if main_view == "市場概況":
             else:
                 figure.add_trace(trace)
 
+        chart_height, chart_bottom_margin = market_chart_dimensions(len(series_to_plot))
         figure.update_layout(
-            height=420,
+            height=chart_height,
             hovermode="x unified",
             legend=dict(
                 orientation="h",
@@ -635,7 +638,7 @@ if main_view == "市場概況":
                 xanchor="left",
                 x=0,
             ),
-            margin=dict(l=20, r=20, t=30, b=90),
+            margin=dict(l=20, r=20, t=30, b=chart_bottom_margin),
         )
         if graph_display_mode == "左右の軸":
             figure.update_yaxes(
@@ -672,17 +675,14 @@ if main_view == "市場概況":
         DATA_SOURCE_LABELS,
         normalized=normalize_values,
     )
+    latest_value_widths = latest_value_column_widths(latest_values_table)
     st.dataframe(
         latest_values_table,
         hide_index=True,
-        use_container_width=True,
+        use_container_width=False,
         column_config={
-            "指標名": st.column_config.TextColumn(width="medium"),
-            "最新の値": st.column_config.TextColumn(width="medium"),
-            "直前の値との比": st.column_config.TextColumn(width="medium"),
-            "重要度": st.column_config.TextColumn(width="small"),
-            "データ日": st.column_config.TextColumn(width="small"),
-            "データ元": st.column_config.TextColumn(width="medium"),
+            column: st.column_config.TextColumn(width=latest_value_widths[column])
+            for column in latest_values_table.columns
         },
     )
     for name, series in series_to_plot.items():
