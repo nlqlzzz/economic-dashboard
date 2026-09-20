@@ -74,6 +74,7 @@ from market_range import (
 from market_range_view import MARKET_RANGE_MOBILE_CSS, render_market_range_selector
 from market_overview_view import (
     build_latest_values_table,
+    change_rates_table_html,
     latest_values_table_html,
     market_chart_dimensions,
     render_sidebar_indicator_category,
@@ -700,7 +701,10 @@ if main_view == "市場概況":
 
     st.subheader("騰落率")
     st.caption("直前値比は直前の観測値、その他は指定時点以前で最も新しい観測値を基準に計算します。")
-    st.dataframe(pd.DataFrame(change_rows), hide_index=True, use_container_width=True)
+    st.markdown(
+        change_rates_table_html(pd.DataFrame(change_rows)),
+        unsafe_allow_html=True,
+    )
 
     market_summary = build_market_summary(series_to_plot, INDICATORS)
     st.subheader("今日のマーケット")
