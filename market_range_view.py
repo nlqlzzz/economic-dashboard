@@ -9,14 +9,26 @@ from market_range import MARKET_RANGE_LABELS, MARKET_RANGE_PRESETS
 MARKET_RANGE_MOBILE_CSS = """
 <style>
 @media (max-width: 768px) {
-    .st-key-market_range_preset [data-testid="stRadio"] [role="radiogroup"] {
-        flex-wrap: nowrap;
-        overflow-x: auto;
+    .st-key-market_range_preset [data-testid="stRadio"] [role="radiogroup"],
+    .st-key-market_range_preset div[role="radiogroup"] {
+        display: flex !important;
+        flex-wrap: nowrap !important;
+        gap: 0.35rem !important;
+        overflow-x: auto !important;
         scrollbar-width: thin;
         padding-bottom: 0.25rem;
     }
-    .st-key-market_range_preset [data-testid="stRadio"] label {
-        flex: 0 0 auto;
+    .st-key-market_range_preset [data-testid="stRadio"] label,
+    .st-key-market_range_preset div[role="radiogroup"] label {
+        flex: 0 0 auto !important;
+        width: max-content !important;
+        min-width: max-content !important;
+    }
+    .st-key-market_range_preset [data-testid="stRadio"] label p,
+    .st-key-market_range_preset div[role="radiogroup"] label p {
+        white-space: nowrap !important;
+        word-break: keep-all !important;
+        font-size: 0.82rem !important;
     }
 }
 </style>

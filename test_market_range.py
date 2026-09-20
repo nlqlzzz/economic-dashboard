@@ -79,8 +79,10 @@ class MarketRangeTest(unittest.TestCase):
         self.assertLess(control, latest)
 
     def test_mobile_css_keeps_presets_in_one_scrollable_row(self):
-        self.assertIn("flex-wrap: nowrap", MARKET_RANGE_MOBILE_CSS)
-        self.assertIn("overflow-x: auto", MARKET_RANGE_MOBILE_CSS)
+        self.assertIn("flex-wrap: nowrap !important", MARKET_RANGE_MOBILE_CSS)
+        self.assertIn("overflow-x: auto !important", MARKET_RANGE_MOBILE_CSS)
+        self.assertIn("white-space: nowrap !important", MARKET_RANGE_MOBILE_CSS)
+        self.assertIn("word-break: keep-all !important", MARKET_RANGE_MOBILE_CSS)
 
     def test_apptest_shows_all_presets_and_distinguishes_custom(self):
         app = AppTest.from_string(
