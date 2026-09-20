@@ -26,6 +26,15 @@ LATEST_VALUE_WIDTH_LIMITS = {
     "データ日": (105, 120),
     "データ元": (100, 190),
 }
+CHANGE_RATE_COLUMNS = ["指標", "直前値比", "1週間", "1か月", "年初来", "表示期間"]
+CHANGE_RATE_WIDTH_LIMITS = {
+    "指標": (110, 220),
+    "直前値比": (90, 120),
+    "1週間": (76, 100),
+    "1か月": (76, 100),
+    "年初来": (76, 100),
+    "表示期間": (90, 110),
+}
 MARKET_CHART_PLOT_HEIGHT = 360
 MARKET_CHART_TOP_MARGIN = 30
 MARKET_CHART_LEGEND_ROW_HEIGHT = 27
@@ -39,11 +48,14 @@ def _display_character_width(value: object) -> int:
     )
 
 
-def latest_value_column_widths(table: pd.DataFrame) -> dict[str, int]:
-    """Size columns from visible text, with caps for unusually long indicators."""
+def _bounded_column_widths(
+    table: pd.DataFrame,
+    columns: list[str],
+    limits: Mapping[str, tuple[int, int]],
+) -> dict[str, int]:
     widths: dict[str, int] = {}
-    for column in LATEST_VALUE_COLUMNS:
-        minimum, maximum = LATEST_VALUE_WIDTH_LIMITS[column]
+    for column in columns:
+        minimum, maximum = limits[column]
         content_width = max(
             [_display_character_width(column)]
             + [_display_character_width(value) for value in table[column].fillna("")]
@@ -52,21 +64,37 @@ def latest_value_column_widths(table: pd.DataFrame) -> dict[str, int]:
     return widths
 
 
-def latest_values_table_html(table: pd.DataFrame) -> str:
-    """Render a stable, compact table without the stateful dataframe viewport."""
-    widths = latest_value_column_widths(table)
-    total_width = sum(widths.values())
-    columns = "".join(
-        f'<col style="width:{widths[column]}px;max-width:{widths[column]}px">'
-        for column in LATEST_VALUE_COLUMNS
+def latest_value_column_widths(table: pd.DataFrame) -> dict[str, int]:
+    """Size latest-value columns from visible text with bounded widths."""
+    return _bounded_column_widths(
+        table, LATEST_VALUE_COLUMNS, LATEST_VALUE_WIDTH_LIMITS
     )
-    headers = "".join(f"<th>{escape(column)}</th>" for column in LATEST_VALUE_COLUMNS)
+
+
+def change_rate_column_widths(table: pd.DataFrame) -> dict[str, int]:
+    """Size return columns from visible text with bounded widths."""
+    return _bounded_column_widths(table, CHANGE_RATE_COLUMNS, CHANGE_RATE_WIDTH_LIMITS)
+
+
+def _stable_table_html(
+    table: pd.DataFrame,
+    columns: list[str],
+    widths: Mapping[str, int],
+    aria_label: str,
+) -> str:
+    total_width = sum(widths.values())
+    colgroup_html = "".join(
+        f'<col style="width:{widths[column]}px;max-width:{widths[column]}px">'
+        for column in columns
+    )
+    column_names = list(table.columns)
+    headers = "".join(f"<th>{escape(column)}</th>" for column in column_names)
     rows = []
     for _, row in table.iterrows():
         cells = "".join(
             f'<td title="{escape(str(row[column]), quote=True)}">'
             f"{escape(str(row[column]))}</td>"
-            for column in LATEST_VALUE_COLUMNS
+            for column in column_names
         )
         rows.append(f"<tr>{cells}</tr>")
     return f"""
@@ -102,14 +130,34 @@ def latest_values_table_html(table: pd.DataFrame) -> str:
 .market-latest-values td:last-child {{ border-right: 0; }}
 .market-latest-values tbody tr:last-child td {{ border-bottom: 0; }}
 </style>
-<div class="market-latest-values-wrap" tabindex="0" aria-label="最新値の表">
+<div class="market-latest-values-wrap" tabindex="0" aria-label="{escape(aria_label, quote=True)}">
   <table class="market-latest-values">
-    <colgroup>{columns}</colgroup>
+    <colgroup>{colgroup_html}</colgroup>
     <thead><tr>{headers}</tr></thead>
     <tbody>{''.join(rows)}</tbody>
   </table>
 </div>
 """
+
+
+def latest_values_table_html(table: pd.DataFrame) -> str:
+    """Render a stable latest-values table without a stateful viewport."""
+    return _stable_table_html(
+        table,
+        LATEST_VALUE_COLUMNS,
+        latest_value_column_widths(table),
+        "最新値の表",
+    )
+
+
+def change_rates_table_html(table: pd.DataFrame) -> str:
+    """Render stable market returns without preserving a stale scroll offset."""
+    return _stable_table_html(
+        table,
+        CHANGE_RATE_COLUMNS,
+        change_rate_column_widths(table),
+        "騰落率の表",
+    )
 
 
 def market_chart_dimensions(series_count: int) -> tuple[int, int]:

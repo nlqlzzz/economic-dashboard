@@ -5,11 +5,15 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from market_overview_view import (
+    CHANGE_RATE_COLUMNS,
+    CHANGE_RATE_WIDTH_LIMITS,
     LATEST_VALUE_COLUMNS,
     LATEST_VALUE_WIDTH_LIMITS,
     MARKET_CHART_PLOT_HEIGHT,
     MARKET_CHART_TOP_MARGIN,
     build_latest_values_table,
+    change_rate_column_widths,
+    change_rates_table_html,
     latest_value_column_widths,
     latest_values_table_html,
     market_chart_dimensions,
@@ -100,6 +104,33 @@ class MarketOverviewViewTest(unittest.TestCase):
         today = source.index('st.subheader("今日のマーケット")', latest)
         self.assertLess(latest, returns)
         self.assertLess(returns, today)
+
+    def test_change_rates_table_uses_stable_scrollable_rendering(self):
+        table = pd.DataFrame(
+            [{
+                "指標": "非常に長い指標名" * 20,
+                "直前値比": "+1.00%",
+                "1週間": "+2.00%",
+                "1か月": "+3.00%",
+                "年初来": "+4.00%",
+                "表示期間": "+5.00%",
+            }],
+            columns=CHANGE_RATE_COLUMNS,
+        )
+        widths = change_rate_column_widths(table)
+        self.assertEqual(widths["指標"], CHANGE_RATE_WIDTH_LIMITS["指標"][1])
+        html = change_rates_table_html(table)
+        self.assertIn('aria-label="騰落率の表"', html)
+        self.assertIn("overflow-x: auto", html)
+        self.assertIn("+5.00%", html)
+
+    def test_market_overview_no_longer_uses_dataframe_for_change_rates(self):
+        source = Path("app.py").read_text(encoding="utf-8")
+        returns = source.index('st.subheader("騰落率")')
+        today = source.index('st.subheader("今日のマーケット")', returns)
+        section = source[returns:today]
+        self.assertIn("change_rates_table_html", section)
+        self.assertNotIn("st.dataframe", section)
 
     def test_many_series_expand_total_chart_without_shrinking_plot_area(self):
         two_height, two_bottom = market_chart_dimensions(2)
