@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from html import escape
 import unicodedata
 
 import pandas as pd
@@ -49,6 +50,66 @@ def latest_value_column_widths(table: pd.DataFrame) -> dict[str, int]:
         )
         widths[column] = min(maximum, max(minimum, content_width * 8 + 28))
     return widths
+
+
+def latest_values_table_html(table: pd.DataFrame) -> str:
+    """Render a stable, compact table without the stateful dataframe viewport."""
+    widths = latest_value_column_widths(table)
+    total_width = sum(widths.values())
+    columns = "".join(
+        f'<col style="width:{widths[column]}px;max-width:{widths[column]}px">'
+        for column in LATEST_VALUE_COLUMNS
+    )
+    headers = "".join(f"<th>{escape(column)}</th>" for column in LATEST_VALUE_COLUMNS)
+    rows = []
+    for _, row in table.iterrows():
+        cells = "".join(
+            f'<td title="{escape(str(row[column]), quote=True)}">'
+            f"{escape(str(row[column]))}</td>"
+            for column in LATEST_VALUE_COLUMNS
+        )
+        rows.append(f"<tr>{cells}</tr>")
+    return f"""
+<style>
+.market-latest-values-wrap {{
+    width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    border: 1px solid rgba(128, 128, 128, 0.28);
+    border-radius: 0.5rem;
+}}
+.market-latest-values {{
+    width: {total_width}px;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}}
+.market-latest-values th,
+.market-latest-values td {{
+    padding: 0.55rem 0.65rem;
+    border-right: 1px solid rgba(128, 128, 128, 0.22);
+    border-bottom: 1px solid rgba(128, 128, 128, 0.22);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: left;
+}}
+.market-latest-values th {{
+    background: rgba(128, 128, 128, 0.12);
+    font-weight: 600;
+}}
+.market-latest-values th:last-child,
+.market-latest-values td:last-child {{ border-right: 0; }}
+.market-latest-values tbody tr:last-child td {{ border-bottom: 0; }}
+</style>
+<div class="market-latest-values-wrap" tabindex="0" aria-label="最新値の表">
+  <table class="market-latest-values">
+    <colgroup>{columns}</colgroup>
+    <thead><tr>{headers}</tr></thead>
+    <tbody>{''.join(rows)}</tbody>
+  </table>
+</div>
+"""
 
 
 def market_chart_dimensions(series_count: int) -> tuple[int, int]:

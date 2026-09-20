@@ -11,6 +11,7 @@ from market_overview_view import (
     MARKET_CHART_TOP_MARGIN,
     build_latest_values_table,
     latest_value_column_widths,
+    latest_values_table_html,
     market_chart_dimensions,
 )
 
@@ -79,11 +80,26 @@ class MarketOverviewViewTest(unittest.TestCase):
             self.assertGreaterEqual(width, minimum)
             self.assertLessEqual(width, maximum)
 
-    def test_latest_value_table_does_not_stretch_columns_to_container(self):
+    def test_latest_value_table_is_static_scrollable_and_escapes_content(self):
+        table = pd.DataFrame(
+            [{column: "<unsafe>" for column in LATEST_VALUE_COLUMNS}],
+            columns=LATEST_VALUE_COLUMNS,
+        )
+        html = latest_values_table_html(table)
+        self.assertIn('class="market-latest-values-wrap"', html)
+        self.assertIn("overflow-x: auto", html)
+        self.assertIn("table-layout: fixed", html)
+        self.assertIn("text-overflow: ellipsis", html)
+        self.assertNotIn("<unsafe>", html)
+        self.assertIn("&lt;unsafe&gt;", html)
+
+    def test_market_overview_orders_returns_before_today_summary(self):
         source = Path("app.py").read_text(encoding="utf-8")
-        table_call = source.index("latest_values_table,")
-        table_call_end = source.index(")\n    for name, series", table_call)
-        self.assertIn("use_container_width=False", source[table_call:table_call_end])
+        latest = source.index('st.markdown(f"### 最新値')
+        returns = source.index('st.subheader("騰落率")', latest)
+        today = source.index('st.subheader("今日のマーケット")', latest)
+        self.assertLess(latest, returns)
+        self.assertLess(returns, today)
 
     def test_many_series_expand_total_chart_without_shrinking_plot_area(self):
         two_height, two_bottom = market_chart_dimensions(2)
