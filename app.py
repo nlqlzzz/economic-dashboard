@@ -74,7 +74,7 @@ from market_range import (
 from market_range_view import MARKET_RANGE_MOBILE_CSS, render_market_range_selector
 from market_overview_view import (
     build_latest_values_table,
-    latest_value_column_widths,
+    latest_values_table_html,
     market_chart_dimensions,
     render_sidebar_indicator_category,
     set_sidebar_indicator_selected,
@@ -675,16 +675,7 @@ if main_view == "市場概況":
         DATA_SOURCE_LABELS,
         normalized=normalize_values,
     )
-    latest_value_widths = latest_value_column_widths(latest_values_table)
-    st.dataframe(
-        latest_values_table,
-        hide_index=True,
-        use_container_width=False,
-        column_config={
-            column: st.column_config.TextColumn(width=latest_value_widths[column])
-            for column in latest_values_table.columns
-        },
-    )
+    st.markdown(latest_values_table_html(latest_values_table), unsafe_allow_html=True)
     for name, series in series_to_plot.items():
         observed_at, _ = latest_value(series)
         previous_change = change_from_previous(series)
@@ -707,6 +698,10 @@ if main_view == "市場概況":
             }
         )
 
+    st.subheader("騰落率")
+    st.caption("直前値比は直前の観測値、その他は指定時点以前で最も新しい観測値を基準に計算します。")
+    st.dataframe(pd.DataFrame(change_rows), hide_index=True, use_container_width=True)
+
     market_summary = build_market_summary(series_to_plot, INDICATORS)
     st.subheader("今日のマーケット")
     st.info(f"**{market_summary['headline']}**")
@@ -721,10 +716,6 @@ if main_view == "市場概況":
             f"選択中の指標の直前観測値比によるルールベース要約です。最新データ日: "
             f"{summary_latest_date:%Y-%m-%d}。ニュースや将来予測は含みません。"
         )
-
-    st.subheader("騰落率")
-    st.caption("直前値比は直前の観測値、その他は指定時点以前で最も新しい観測値を基準に計算します。")
-    st.dataframe(pd.DataFrame(change_rows), hide_index=True, use_container_width=True)
 
     st.subheader("急変検知")
     with st.expander("検知する騰落率を設定"):
