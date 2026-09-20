@@ -64,6 +64,14 @@ from macro_regime import (
     build_us_macro_trends,
 )
 from market_alerts import detect_market_moves
+from market_range import (
+    MARKET_RANGE_DEFAULT,
+    calculate_market_range,
+    filter_market_series,
+    market_data_bounds,
+    market_request_start,
+)
+from market_range_view import MARKET_RANGE_MOBILE_CSS, render_market_range_selector
 from market_hypotheses import build_market_factor_hypotheses
 from market_stress import (
     STRESS_INPUT_INDICATORS,
@@ -239,6 +247,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+st.markdown(MARKET_RANGE_MOBILE_CSS, unsafe_allow_html=True)
 st.title("市場ダッシュボード")
 st.caption("FRED と Yahoo Finance の公開データを表示します。")
 main_view = st.radio(
@@ -340,6 +349,22 @@ def current_alert_thresholds() -> dict[str, float]:
         "1か月": float(st.session_state.get("alert_month_threshold", 10.0)),
     }
 
+
+def activate_custom_market_range() -> None:
+    """Sidebar dates override the market-overview preset on the next rerun."""
+    st.session_state["market_range_preset"] = "Custom"
+
+
+def update_custom_market_start() -> None:
+    activate_custom_market_range()
+    start = st.session_state.get("start_date")
+    end = st.session_state.get("end_date")
+    if start is not None and end is not None and start > end:
+        st.session_state["end_date"] = start
+
+
+st.session_state.setdefault("market_range_preset", MARKET_RANGE_DEFAULT)
+
 with st.sidebar:
     st.header("表示設定")
     if main_view == "日本株":
@@ -354,11 +379,27 @@ with st.sidebar:
         "3年": (today - pd.DateOffset(years=3)).date(),
         "任意指定": date(2026, 1, 1),
     }
-    selected_period = st.selectbox("表示期間", list(period_starts))
-    if st.session_state.get("last_selected_period") != selected_period:
+    selected_period = st.selectbox("表示期間", list(period_starts), key="sidebar_display_period")
+    last_selected_period = st.session_state.get("last_selected_period")
+    if last_selected_period != selected_period:
         st.session_state["start_date"] = period_starts[selected_period]
+        st.session_state["end_date"] = today.date()
+        if last_selected_period is not None:
+            activate_custom_market_range()
     st.session_state["last_selected_period"] = selected_period
-    start_date = st.date_input("開始日", max_value=date.today(), key="start_date")
+    start_date = st.date_input(
+        "開始日",
+        max_value=date.today(),
+        key="start_date",
+        on_change=update_custom_market_start,
+    )
+    st.session_state.setdefault("end_date", today.date())
+    end_date = st.date_input(
+        "終了日",
+        max_value=date.today(),
+        key="end_date",
+        on_change=activate_custom_market_range,
+    )
     st.divider()
 
     selected_names: list[str] = []
@@ -450,6 +491,10 @@ if main_view != "日本株" and not selected_names:
     st.stop()
 
 normalize_values = st.session_state.get("normalize_values_v2", True)
+active_market_range = st.session_state.get("market_range_preset", MARKET_RANGE_DEFAULT)
+data_request_start = start_date
+if main_view == "市場概況":
+    data_request_start = market_request_start(active_market_range, today, start_date)
 series_to_plot: dict[str, pd.Series] = {}
 errors: list[str] = []
 
@@ -458,11 +503,11 @@ if main_view != "日本株":
         for name in selected_names:
             info = INDICATORS[name]
             try:
-                series = load_indicator_data(info, str(start_date))
+                series = load_indicator_data(info, str(data_request_start))
                 source_metadata = dict(series.attrs)
                 if info.get("yoy", False):
                     series = calc_yoy(series)
-                if normalize_values:
+                if normalize_values and main_view != "市場概況":
                     series = normalize(series)
                 series.attrs.update(source_metadata)
                 series_to_plot[name] = series
@@ -476,6 +521,40 @@ if main_view != "日本株":
 
 for error in errors:
     st.warning(error)
+
+market_range_start = pd.Timestamp(start_date)
+market_range_end = pd.Timestamp(end_date)
+market_latest_data_date: pd.Timestamp | None = None
+if main_view == "市場概況" and series_to_plot:
+    maximum_date = end_date if active_market_range == "Custom" else today
+    bounds = market_data_bounds(series_to_plot, maximum_date)
+    if bounds is None:
+        series_to_plot = {}
+    else:
+        earliest_data_date, market_latest_data_date = bounds
+        try:
+            market_range_start, market_range_end = calculate_market_range(
+                active_market_range,
+                market_latest_data_date,
+                earliest_data_date,
+                start_date,
+                end_date,
+            )
+        except ValueError as error:
+            st.warning(f"市場概況の表示期間が不正です: {error}")
+            series_to_plot = {}
+        else:
+            series_to_plot = filter_market_series(
+                series_to_plot, market_range_start, market_range_end
+            )
+            if normalize_values:
+                normalized_series: dict[str, pd.Series] = {}
+                for name, series in series_to_plot.items():
+                    source_metadata = dict(series.attrs)
+                    normalized = normalize(series)
+                    normalized.attrs.update(source_metadata)
+                    normalized_series[name] = normalized
+                series_to_plot = normalized_series
 
 if main_view != "日本株" and not series_to_plot:
     st.error("データを表示できませんでした。ネットワーク接続とティッカーを確認してください。")
@@ -577,6 +656,12 @@ if main_view == "市場概況":
         else:
             figure.update_yaxes(title="100基準" if normalize_values else "値")
         st.plotly_chart(figure, use_container_width=True, config=exploratory_chart_config())
+    render_market_range_selector(
+        active_market_range,
+        market_range_start,
+        market_range_end,
+        market_latest_data_date,
+    )
     st.checkbox("100を基準に比較する", value=True, key="normalize_values_v2")
 
     latest_values_note = (
@@ -635,7 +720,7 @@ if main_view == "市場概況":
                 "1週間": format_rate(percent_change_since(series, observed_at - pd.Timedelta(days=7))),
                 "1か月": format_rate(percent_change_since(series, observed_at - pd.DateOffset(months=1))),
                 "年初来": format_rate(percent_change_since(series, pd.Timestamp(year=observed_at.year, month=1, day=1))),
-                "表示期間": format_rate(percent_change_since(series, pd.Timestamp(start_date))),
+                "表示期間": format_rate(percent_change_since(series, market_range_start)),
             }
         )
 
